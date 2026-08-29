@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "Swift Video Downloader",
+  "version": "2.1.0",
+  "description": "IDM-style video downloader — powered by Swift",
+  "permissions": ["activeTab", "scripting", "clipboardWrite", "webRequest", "tabs"],
+  "host_permissions": [
+    "https://*/*",
+    "http://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": "swift.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["swift.png"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

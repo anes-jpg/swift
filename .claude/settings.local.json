@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/dev/**)",
+      "Bash(cargo check *)",
+      "Bash(npm run *)",
+      "Bash(node --check background.js)",
+      "Bash(node --check content.js)",
+      "Bash(node --check popup.js)",
+      "Read(//c/Program Files/Microsoft Visual Studio/**)",
+      "Read(//c/Program Files \\(x86\\)/Microsoft Visual Studio/**)",
+      "Bash(\"C:/Program Files \\(x86\\)/Microsoft Visual Studio/Installer/vswhere.exe\" -latest -property installationPath)",
+      "Bash(cmd.exe //c '\"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\18\\\\Community\\\\VC\\\\Auxiliary\\\\Build\\\\vcvars64.bat\" && npm run tauri:build')",
+      "Bash(cmd.exe //c build-nsis.bat)",
+      "Bash(cmd.exe //c \"C:\\\\\\\\Users\\\\\\\\anesx\\\\\\\\Documents\\\\\\\\2026\\\\\\\\apps\\\\\\\\deployable\\\\\\\\swift\\\\\\\\swift-app\\\\\\\\build-nsis.bat\")"
+    ]
+  }
+}
