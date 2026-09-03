@@ -98,18 +98,6 @@
     requestAnimationFrame(track);
   }
 
-  function positionNearVideo(video) {
-    // Handled by requestAnimationFrame loop
-  }
-
-  function showFAB(video) {
-    if (!fab) createFAB();
-    currentVideo = video;
-    scanVideoSources(video);
-    positionNearVideo(video);
-    fab.classList.add('swift-has-media');
-  }
-
   function hideFAB() {
     if (fab) fab.classList.remove('swift-has-media');
     if (dropdown) dropdown.classList.remove('swift-show');

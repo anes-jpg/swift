@@ -1,92 +1,187 @@
-import type { DownloadItem, VideoInfo, VideoFormat, AppSettings } from "../types";
+import type { DownloadItem, VideoInfo, VideoFormat, AppSettings, HistoryItem } from "../types";
 
 type Listener = () => void;
 
 const listeners = new Set<Listener>();
 
-let downloads: DownloadItem[] = [];
-let settings: AppSettings = {
+const DEFAULT_SETTINGS: AppSettings = {
   downloadDir: "",
-  theme: "midnight",
-  glassOpacity: 0.15,
-  gradientPreset: "aurora",
   proxy: "",
   maxConcurrent: 3,
   noLogMode: false,
+  defaultFormat: "best_video",
+  glassOpacity: 0.12,
+  theme: "midnight",
+  gradientPreset: "midnight",
 };
 
-export function subscribe(fn: Listener) {
-  listeners.add(fn);
-  return () => listeners.delete(fn);
+function loadSettings(): AppSettings {
+  try {
+    const raw = localStorage.getItem("swift_settings");
+    if (raw) {
+      return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+    }
+  } catch {}
+  return DEFAULT_SETTINGS;
 }
 
-function notify() {
-  listeners.forEach((fn) => fn());
+function saveSettings(s: AppSettings) {
+  try {
+    localStorage.setItem("swift_settings", JSON.stringify(s));
+  } catch {}
 }
 
-export function getDownloads() {
+function loadHistory(): HistoryItem[] {
+  try {
+    const raw = localStorage.getItem("swift_history");
+    if (raw) {
+      return JSON.parse(raw);
+    }
+  } catch {}
+  return [];
+}
+
+function saveHistory(h: HistoryItem[]) {
+  try {
+    localStorage.setItem("swift_history", JSON.stringify(h));
+  } catch {}
+}
+
+export function applyThemeAndGlass(s: AppSettings) {
+  if (typeof document === "undefined") return;
+  const root = document.documentElement;
+
+  // Pure Black & Red Theme
+  root.style.setProperty("--bg-primary", "#050505");
+  root.style.setProperty("--accent", "#dc2626");
+  root.style.setProperty("--accent-glow", "rgba(220, 38, 38, 0.45)");
+  root.style.setProperty("--accent-hover", "#ef4444");
+
+  const opacity = s.glassOpacity ?? 0.12;
+  root.style.setProperty("--bg-glass", `rgba(255, 255, 255, ${opacity})`);
+  root.style.setProperty(
+    "--bg-glass-hover",
+    `rgba(255, 255, 255, ${Math.min(0.4, opacity + 0.04)})`
+  );
+  root.style.setProperty(
+    "--bg-glass-active",
+    `rgba(255, 255, 255, ${Math.min(0.5, opacity + 0.08)})`
+  );
+  root.style.setProperty(
+    "--border-glass",
+    `rgba(255, 255, 255, ${Math.min(0.25, opacity * 0.7)})`
+  );
+}
+
+let downloads: DownloadItem[] = [];
+let settings: AppSettings = loadSettings();
+let history: HistoryItem[] = loadHistory();
+
+// Initialize styles immediately
+applyThemeAndGlass(settings);
+
+function emitChange() {
+  listeners.forEach((listener) => listener());
+}
+
+export function subscribe(listener: Listener): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+export function getDownloads(): DownloadItem[] {
   return downloads;
 }
 
-export function getSettings() {
+export function getHistory(): HistoryItem[] {
+  return history;
+}
+
+export function getSettings(): AppSettings {
   return settings;
 }
 
-export function addDownload(info: VideoInfo, format: VideoFormat) {
-  const item: DownloadItem = {
-    id: crypto.randomUUID(),
-    url: info.url,
-    title: info.title,
-    thumbnail: info.thumbnail,
-    format,
-    status: "queued",
+export function updateSettings(newSettings: Partial<AppSettings>) {
+  settings = { ...settings, ...newSettings };
+  saveSettings(settings);
+  applyThemeAndGlass(settings);
+  emitChange();
+}
+
+export function addDownload(video: VideoInfo, format: VideoFormat): string {
+  const id = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+  const newItem: DownloadItem = {
+    id,
+    title: video.title,
+    thumbnail: video.thumbnail,
+    url: video.url,
+    format: `${format.resolution} (${format.ext})`,
     progress: 0,
+    status: "queued",
     speed: "0 B/s",
     eta: "--:--",
-    filesize: format.filesize ?? 0,
-    downloaded: 0,
-    output_path: "",
+    filesize: format.filesize || 0,
   };
-  downloads = [...downloads, item];
-  notify();
-  return item.id;
+
+  downloads = [newItem, ...downloads];
+  emitChange();
+  return id;
 }
 
 export function updateDownload(id: string, updates: Partial<DownloadItem>) {
-  const existing = downloads.find((d) => d.id === id);
-  if (existing) {
-    downloads = downloads.map((d) => (d.id === id ? { ...d, ...updates } : d));
-  } else {
-    const newItem: DownloadItem = {
-      id,
-      url: updates.url || "",
-      title: updates.title || "Downloading...",
-      thumbnail: updates.thumbnail || "",
-      format: updates.format || { format_id: "best", ext: "mp4", resolution: "best", fps: 0, filesize: null, vcodec: "", acodec: "", quality: 0, url: "" },
-      status: updates.status || "queued",
-      progress: updates.progress || 0,
-      speed: updates.speed || "0 B/s",
-      eta: updates.eta || "--:--",
-      filesize: updates.filesize || 0,
-      downloaded: updates.downloaded || 0,
-      output_path: updates.output_path || "",
+  let itemCompleted: DownloadItem | null = null;
+
+  downloads = downloads.map((item) => {
+    if (item.id === id) {
+      const updated = { ...item, ...updates };
+      if (updates.status === "completed" && item.status !== "completed") {
+        itemCompleted = updated;
+      }
+      return updated;
+    }
+    return item;
+  });
+
+  if (itemCompleted && !settings.noLogMode) {
+    const item = itemCompleted as DownloadItem;
+    const historyItem: HistoryItem = {
+      id: item.id,
+      url: item.url,
+      title: item.title,
+      thumbnail: item.thumbnail,
+      resolution: item.format,
+      ext: item.format.includes("mp3") || item.format.includes("audio") ? "mp3" : "mp4",
+      filesize: item.filesize,
+      output_path: item.output_path || "",
+      completed_at: Date.now(),
     };
-    downloads = [...downloads, newItem];
+    history = [historyItem, ...history.filter((h) => h.id !== item.id)];
+    saveHistory(history);
   }
-  notify();
+
+  emitChange();
 }
 
 export function removeDownload(id: string) {
-  downloads = downloads.filter((d) => d.id !== id);
-  notify();
+  downloads = downloads.filter((item) => item.id !== id);
+  emitChange();
 }
 
 export function clearCompleted() {
-  downloads = downloads.filter((d) => d.status !== "completed");
-  notify();
+  downloads = downloads.filter((item) => item.status !== "completed");
+  emitChange();
 }
 
-export function updateSettings(updates: Partial<AppSettings>) {
-  settings = { ...settings, ...updates };
-  notify();
+export function removeFromHistory(id: string) {
+  history = history.filter((item) => item.id !== id);
+  saveHistory(history);
+  emitChange();
+}
+
+export function clearHistory() {
+  history = [];
+  saveHistory(history);
+  emitChange();
 }

@@ -39,8 +39,19 @@ pub struct DownloadState {
     eta: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DownloadTaskInfo {
+    pub id: String,
+    pub url: String,
+    pub format_id: String,
+    pub download_dir: Option<String>,
+    pub proxy: Option<String>,
+}
+
 pub struct AppState {
     downloads: Mutex<HashMap<String, DownloadState>>,
+    processes: Mutex<HashMap<String, u32>>,
+    tasks: Mutex<HashMap<String, DownloadTaskInfo>>,
 }
 
 fn sanitize_filename(name: &str) -> String {
@@ -91,7 +102,7 @@ pub fn find_command(name: &str) -> Option<String> {
         let stdout = String::from_utf8_lossy(&output.stdout);
         for line in stdout.lines() {
             let path = line.trim();
-            if !path.to_lowercase().contains("wrappers") {
+            if !path.to_lowercase().contains("wrappers") && std::path::Path::new(path).exists() {
                 return Some(path.to_string());
             }
         }
@@ -100,6 +111,7 @@ pub fn find_command(name: &str) -> Option<String> {
     if cfg!(windows) {
         let home = std::env::var("USERPROFILE").unwrap_or_default();
         let local = std::env::var("LOCALAPPDATA").unwrap_or_default();
+        let program_files = std::env::var("ProgramFiles").unwrap_or_else(|_| "C:\\Program Files".into());
 
         let known_paths: Vec<String> = match name {
             "ffmpeg" => {
@@ -112,13 +124,41 @@ pub fn find_command(name: &str) -> Option<String> {
                         }
                     }
                 }
+                let winget_pkgs = format!("{}\\Microsoft\\WinGet\\Packages", local);
+                if let Ok(entries) = std::fs::read_dir(&winget_pkgs) {
+                    for entry in entries.flatten() {
+                        let p = entry.path();
+                        if p.file_name().map_or(false, |n| n.to_string_lossy().to_lowercase().contains("ffmpeg")) {
+                            if let Ok(sub) = std::fs::read_dir(&p) {
+                                for sub_entry in sub.flatten() {
+                                    let bin = sub_entry.path().join("bin").join("ffmpeg.exe");
+                                    if bin.exists() {
+                                        paths.push(bin.to_string_lossy().to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 paths.push(format!("{}\\Microsoft\\WinGet\\Links\\ffmpeg.exe", local));
                 paths.push(format!("{}\\scoop\\shims\\ffmpeg.exe", home));
+                paths.push(format!("{}\\ffmpeg\\bin\\ffmpeg.exe", program_files));
                 paths
             }
             "yt-dlp" => {
                 let mut paths = Vec::new();
                 if let Ok(entries) = std::fs::read_dir(format!("{}\\AppData\\Local\\Programs\\Python", home)) {
+                    for entry in entries.flatten() {
+                        if !entry.path().join("python.exe").exists() {
+                            continue;
+                        }
+                        let exe = entry.path().join("Scripts").join("yt-dlp.exe");
+                        if exe.exists() {
+                            paths.push(exe.to_string_lossy().to_string());
+                        }
+                    }
+                }
+                if let Ok(entries) = std::fs::read_dir(format!("{}\\AppData\\Roaming\\Python", home)) {
                     for entry in entries.flatten() {
                         let exe = entry.path().join("Scripts").join("yt-dlp.exe");
                         if exe.exists() {
@@ -128,6 +168,7 @@ pub fn find_command(name: &str) -> Option<String> {
                 }
                 paths.push(format!("{}\\Microsoft\\WinGet\\Links\\yt-dlp.exe", local));
                 paths.push(format!("{}\\scoop\\shims\\yt-dlp.exe", home));
+                paths.push(format!("{}\\Programs\\yt-dlp\\yt-dlp.exe", local));
                 paths
             }
             _ => vec![],
@@ -163,12 +204,29 @@ fn enhanced_path() -> String {
     let home = std::env::var("USERPROFILE").unwrap_or_default();
     let local = std::env::var("LOCALAPPDATA").unwrap_or_default();
 
-    let extras = vec![
-        format!("{}\\AppData\\Local\\Programs\\Python\\Python314\\Scripts", home),
-        "C:\\ffmpeg\\ffmpeg-8.1.1-essentials_build\\bin".to_string(),
+    let mut extras = vec![
+        format!("{}\\AppData\\Local\\Programs\\Python\\Python312", home),
+        format!("{}\\AppData\\Local\\Programs\\Python\\Python312\\Scripts", home),
+        format!("{}\\AppData\\Local\\Programs\\Python\\Python311", home),
+        format!("{}\\AppData\\Local\\Programs\\Python\\Python311\\Scripts", home),
+        format!("{}\\AppData\\Local\\Programs\\Python\\Python313", home),
+        format!("{}\\AppData\\Local\\Programs\\Python\\Python313\\Scripts", home),
         format!("{}\\Microsoft\\WinGet\\Links", local),
         format!("{}\\scoop\\shims", home),
+        "C:\\ffmpeg\\ffmpeg-8.1.1-essentials_build\\bin".to_string(),
     ];
+
+    if let Some(ffmpeg_bin) = find_command("ffmpeg") {
+        if let Some(parent) = std::path::Path::new(&ffmpeg_bin).parent() {
+            extras.push(parent.to_string_lossy().to_string());
+        }
+    }
+
+    if let Some(ytdlp_bin) = find_command("yt-dlp") {
+        if let Some(parent) = std::path::Path::new(&ytdlp_bin).parent() {
+            extras.push(parent.to_string_lossy().to_string());
+        }
+    }
 
     for dir in extras {
         if !path.contains(&dir) {
@@ -187,15 +245,21 @@ const SWIFT_TOKEN: &str = "swift-local-a7f3e9c2";
 
 const COOKIE_BROWSERS: &[&str] = &["chrome", "edge", "firefox", "brave"];
 
-fn ytdlp_download_args(
+pub fn build_ytdlp_args(
     url: &str,
     referer: &str,
     format_selector: &str,
     output_template: &str,
     ffmpeg_available: bool,
     cookie_browser: Option<&str>,
-    app: &tauri::AppHandle,
+    proxy: Option<&str>,
+    ffmpeg_location: Option<&str>,
 ) -> Vec<String> {
+    let is_audio = format_selector == "audio only"
+        || format_selector.contains("audio")
+        || format_selector.starts_with("ba")
+        || format_selector == "bestaudio";
+
     let mut args = vec![
         "--no-playlist".into(),
         "--no-warnings".into(),
@@ -205,24 +269,52 @@ fn ytdlp_download_args(
         "--extractor-retries".into(),
         "3".into(),
         "--newline".into(),
+        "--windows-filenames".into(),
+        "--trim-filenames".into(),
+        "160".into(),
         "--user-agent".into(),
         BROWSER_UA.into(),
         "--referer".into(),
         referer.into(),
-        "-f".into(),
-        format_selector.into(),
-        "-o".into(),
-        output_template.into(),
     ];
 
+    if is_audio {
+        args.push("-f".into());
+        args.push(if format_selector == "audio only" {
+            "bestaudio/best".into()
+        } else {
+            format_selector.into()
+        });
+
+        if ffmpeg_available {
+            args.push("-x".into());
+            args.push("--audio-format".into());
+            args.push("mp3".into());
+            args.push("--audio-quality".into());
+            args.push("0".into());
+        }
+    } else {
+        args.push("-f".into());
+        args.push(format_selector.into());
+
+        if ffmpeg_available {
+            args.push("--merge-output-format".into());
+            args.push("mp4".into());
+        }
+    }
+
     if ffmpeg_available {
-        args.push("--merge-output-format".into());
-        args.push("mp4".into());
-        
-        if let Ok(local_dir) = app.path().app_local_data_dir() {
-            let wrapper_dir = local_dir.join("wrappers");
+        if let Some(loc) = ffmpeg_location {
             args.push("--ffmpeg-location".into());
-            args.push(wrapper_dir.to_string_lossy().to_string());
+            args.push(loc.into());
+        }
+    }
+
+    if let Some(p) = proxy {
+        let trimmed = p.trim();
+        if !trimmed.is_empty() {
+            args.push("--proxy".into());
+            args.push(trimmed.into());
         }
     }
 
@@ -231,8 +323,86 @@ fn ytdlp_download_args(
         args.push(browser.into());
     }
 
+    args.push("-o".into());
+    args.push(output_template.into());
+
     args.push(url.into());
     args
+}
+
+fn ytdlp_download_args(
+    url: &str,
+    referer: &str,
+    format_selector: &str,
+    output_template: &str,
+    ffmpeg_available: bool,
+    cookie_browser: Option<&str>,
+    proxy: Option<&str>,
+    app: &tauri::AppHandle,
+) -> Vec<String> {
+    let ffmpeg_loc = if ffmpeg_available {
+        app.path().app_local_data_dir().ok().map(|d| d.join("wrappers").to_string_lossy().to_string())
+    } else {
+        None
+    };
+
+    build_ytdlp_args(
+        url,
+        referer,
+        format_selector,
+        output_template,
+        ffmpeg_available,
+        cookie_browser,
+        proxy,
+        ffmpeg_loc.as_deref(),
+    )
+}
+
+pub fn parse_progress_from_line(line: &str) -> Option<(f64, String, String)> {
+    let line = line.trim();
+    if line.contains("[download]") && line.contains('%') {
+        let after = line.split("[download]").nth(1)?.trim();
+        let percent = after.split('%').next()?.trim().parse::<f64>().ok()?;
+        let speed = after
+            .find("at ")
+            .map(|i| after[i + 3..].split(" ETA").next().unwrap_or("N/A").trim().to_string())
+            .unwrap_or_else(|| "N/A".into());
+        let eta = after
+            .find("ETA ")
+            .map(|i| after[i + 4..].trim().to_string())
+            .unwrap_or_else(|| "--:--".into());
+        Some((percent, speed, eta))
+    } else {
+        None
+    }
+}
+
+pub fn parse_destination_from_line(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if let Some(pos) = trimmed.find("[download] Destination: ") {
+        Some(trimmed[pos + 24..].trim().to_string())
+    } else if let Some(pos) = trimmed.find("[Merger] Merging formats into \"") {
+        if let Some(end) = trimmed[pos + 31..].find('"') {
+            Some(trimmed[pos + 31..pos + 31 + end].trim().to_string())
+        } else {
+            None
+        }
+    } else if let Some(pos) = trimmed.find("[ExtractAudio] Destination: ") {
+        Some(trimmed[pos + 28..].trim().to_string())
+    } else if trimmed.contains("has already been downloaded") {
+        if let Some(pos) = trimmed.find("[download] ") {
+            let rest = &trimmed[pos + 11..];
+            if let Some(end) = rest.find(" has already been downloaded") {
+                Some(rest[..end].trim().to_string())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    }
 }
 
 fn emit_progress_line(app: &tauri::AppHandle, id: &str, line: &str) {
@@ -241,27 +411,15 @@ fn emit_progress_line(app: &tauri::AppHandle, id: &str, line: &str) {
         return;
     }
 
-    if line.contains("[download]") && line.contains('%') {
-        let after = line.split("[download]").nth(1).unwrap_or("").trim();
-        if let Ok(percent) = after.split('%').next().unwrap_or("").trim().parse::<f64>() {
-            let speed = after
-                .find("at ")
-                .map(|i| after[i + 3..].split(" ETA").next().unwrap_or("N/A").trim().to_string())
-                .unwrap_or_else(|| "N/A".into());
-            let eta = after
-                .find("ETA ")
-                .map(|i| after[i + 4..].trim().to_string())
-                .unwrap_or_else(|| "--:--".into());
-
-            let reported = percent.min(99.0);
-            let _ = app.emit(
-                "download-progress",
-                serde_json::json!({
-                    "id": id, "status": "downloading",
-                    "progress": reported, "speed": speed, "eta": eta,
-                }),
-            );
-        }
+    if let Some((percent, speed, eta)) = parse_progress_from_line(line) {
+        let reported = percent.min(99.0);
+        let _ = app.emit(
+            "download-progress",
+            serde_json::json!({
+                "id": id, "status": "downloading",
+                "progress": reported, "speed": speed, "eta": eta,
+            }),
+        );
     } else if line.contains("[Merger]") || line.contains("[ffmpeg]") || line.contains("[ExtractAudio]") {
         let _ = app.emit(
             "download-progress",
@@ -315,7 +473,9 @@ fn run_download_with_fallback(
     referer: &str,
     format_selector: &str,
     output_template: &str,
-) -> bool {
+    proxy: Option<&str>,
+    state: &State<'_, AppState>,
+) -> (bool, Option<String>) {
     let ffmpeg_available = has_command("ffmpeg");
 
     let mut candidates: Vec<Option<String>> =
@@ -330,6 +490,7 @@ fn run_download_with_fallback(
             output_template,
             ffmpeg_available,
             candidate.as_deref(),
+            proxy,
             app,
         );
 
@@ -342,22 +503,45 @@ fn run_download_with_fallback(
 
         let mut child = match child {
             Ok(c) => c,
-            Err(_) => return false,
+            Err(_) => return (false, None),
         };
+
+        let pid = child.id();
+        {
+            let mut procs = state.processes.lock().unwrap_or_else(|e| e.into_inner());
+            procs.insert(id.to_string(), pid);
+        }
+
+        let mut captured_path: Option<String> = None;
 
         if let Some(stdout) = child.stdout.take() {
             let reader = BufReader::new(stdout);
             for line in reader.lines().map_while(Result::ok) {
                 emit_progress_line(app, id, &line);
+                if let Some(dest) = parse_destination_from_line(&line) {
+                    captured_path = Some(dest);
+                }
             }
         }
 
-        if matches!(child.wait(), Ok(s) if s.success()) {
-            return true;
+        let status = child.wait();
+
+        {
+            let mut procs = state.processes.lock().unwrap_or_else(|e| e.into_inner());
+            procs.remove(id);
+        }
+
+        if matches!(status, Ok(s) if s.success()) {
+            if captured_path.is_none() && !output_template.contains('%') {
+                if std::path::Path::new(output_template).exists() {
+                    captured_path = Some(output_template.to_string());
+                }
+            }
+            return (true, captured_path);
         }
     }
 
-    false
+    (false, None)
 }
 
 fn spawn_ytdlp_self_update() {
@@ -624,6 +808,8 @@ fn start_download(
     id: String,
     url: String,
     format_id: String,
+    download_dir: Option<String>,
+    proxy: Option<String>,
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
@@ -640,6 +826,19 @@ fn start_download(
             },
         );
     }
+    {
+        let mut tasks = state.tasks.lock().unwrap_or_else(|e| e.into_inner());
+        tasks.insert(
+            id.clone(),
+            DownloadTaskInfo {
+                id: id.clone(),
+                url: url.clone(),
+                format_id: format_id.clone(),
+                download_dir: download_dir.clone(),
+                proxy: proxy.clone(),
+            },
+        );
+    }
 
     let _ = app.emit(
         "download-progress",
@@ -650,40 +849,51 @@ fn start_download(
         }),
     );
 
-    let download_dir = dirs::download_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .to_string_lossy()
-        .to_string();
+    let target_dir = download_dir
+        .filter(|d| !d.trim().is_empty() && std::path::Path::new(d).exists())
+        .unwrap_or_else(|| {
+            dirs::download_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .to_string_lossy()
+                .to_string()
+        });
 
-    let output_template = format!("{}/%(title)s.%(ext)s", download_dir);
+    let output_template = format!("{}/%(title)s.%(ext)s", target_dir);
 
     let id_clone = id.clone();
+    let app_handle = app.clone();
 
     std::thread::spawn(move || {
         let ffmpeg_available = has_command("ffmpeg");
 
-        let format_str = if ffmpeg_available {
+        let format_str = if format_id == "audio only" || format_id.starts_with("ba") {
+            format_id.clone()
+        } else if ffmpeg_available {
             format!("{}+bestaudio/{}/best", format_id, format_id)
         } else {
             format!("{}/best", format_id)
         };
 
         let referer = url.clone();
-        let ok = run_download_with_fallback(
-            &app,
+        let state_in_thread = app_handle.state::<AppState>();
+        let (ok, out_path) = run_download_with_fallback(
+            &app_handle,
             &id_clone,
             &url,
             &referer,
             &format_str,
             &output_template,
+            proxy.as_deref(),
+            &state_in_thread,
         );
 
-        let _ = app.emit(
+        let _ = app_handle.emit(
             "download-progress",
             serde_json::json!({
                 "id": id_clone,
                 "status": if ok { "completed" } else { "failed" },
                 "progress": if ok { 100.0 } else { 0.0 },
+                "output_path": out_path,
             }),
         );
     });
@@ -696,6 +906,8 @@ fn quick_download(
     url: String,
     title: String,
     referer: Option<String>,
+    download_dir: Option<String>,
+    proxy: Option<String>,
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
@@ -714,6 +926,19 @@ fn quick_download(
             },
         );
     }
+    {
+        let mut tasks = state.tasks.lock().unwrap_or_else(|e| e.into_inner());
+        tasks.insert(
+            id.clone(),
+            DownloadTaskInfo {
+                id: id.clone(),
+                url: url.clone(),
+                format_id: "best".into(),
+                download_dir: download_dir.clone(),
+                proxy: proxy.clone(),
+            },
+        );
+    }
 
     let _ = app.emit("quick-download-started", serde_json::json!({
         "id": id,
@@ -727,18 +952,23 @@ fn quick_download(
         "progress": 0.0,
     }));
 
-    let download_dir = dirs::download_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .to_string_lossy()
-        .to_string();
+    let target_dir = download_dir
+        .filter(|d| !d.trim().is_empty() && std::path::Path::new(d).exists())
+        .unwrap_or_else(|| {
+            dirs::download_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .to_string_lossy()
+                .to_string()
+        });
 
     let safe_title = sanitize_filename(&title);
     let output_template = if safe_title.is_empty() {
-        format!("{}/%(title)s.%(ext)s", download_dir)
+        format!("{}/%(title)s.%(ext)s", target_dir)
     } else {
-        format!("{}/{}.%(ext)s", download_dir, safe_title)
+        format!("{}/{}.%(ext)s", target_dir, safe_title)
     };
     let id_clone = id.clone();
+    let app_handle = app.clone();
 
     std::thread::spawn(move || {
         let referer_url = referer.unwrap_or_else(|| url.clone());
@@ -750,19 +980,23 @@ fn quick_download(
             "best[ext=mp4]/best".to_string()
         };
 
-        let ok = run_download_with_fallback(
-            &app,
+        let state_in_thread = app_handle.state::<AppState>();
+        let (ok, out_path) = run_download_with_fallback(
+            &app_handle,
             &id_clone,
             &url,
             &referer_url,
             &format_str,
             &output_template,
+            proxy.as_deref(),
+            &state_in_thread,
         );
 
-        let _ = app.emit("download-progress", serde_json::json!({
+        let _ = app_handle.emit("download-progress", serde_json::json!({
             "id": id_clone,
             "status": if ok { "completed" } else { "failed" },
             "progress": if ok { 100.0 } else { 0.0 },
+            "output_path": out_path,
         }));
     });
 
@@ -789,8 +1023,114 @@ fn resume_download(id: String, state: State<'_, AppState>) -> Result<(), String>
 
 #[tauri::command]
 fn cancel_download(id: String, state: State<'_, AppState>) -> Result<(), String> {
+    let pid = {
+        let mut procs = state.processes.lock().unwrap_or_else(|e| e.into_inner());
+        procs.remove(&id)
+    };
+
+    if let Some(pid) = pid {
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            let mut cmd = Command::new("taskkill");
+            cmd.args(["/F", "/T", "/PID", &pid.to_string()]);
+            cmd.creation_flags(0x08000000);
+            let _ = cmd.output();
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = Command::new("kill").args(["-9", &pid.to_string()]).output();
+        }
+    }
+
     let mut downloads = state.downloads.lock().unwrap_or_else(|e| e.into_inner());
     downloads.remove(&id);
+    let mut tasks = state.tasks.lock().unwrap_or_else(|e| e.into_inner());
+    tasks.remove(&id);
+    Ok(())
+}
+
+#[tauri::command]
+fn retry_download(
+    id: String,
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let task = {
+        let tasks = state.tasks.lock().unwrap_or_else(|e| e.into_inner());
+        tasks.get(&id).cloned()
+    };
+
+    if let Some(t) = task {
+        start_download(
+            t.id,
+            t.url,
+            t.format_id,
+            t.download_dir,
+            t.proxy,
+            state,
+            app,
+        )
+    } else {
+        Err("Download task info not found for retry".to_string())
+    }
+}
+
+#[tauri::command]
+fn open_file(path: String) -> Result<(), String> {
+    if !std::path::Path::new(&path).exists() {
+        return Err(format!("File not found: {}", path));
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut cmd = Command::new("cmd");
+        cmd.args(["/C", "start", "", &path]);
+        cmd.creation_flags(0x08000000);
+        cmd.spawn().map_err(|e| format!("Failed to open file: {}", e))?;
+    }
+    #[cfg(not(windows))]
+    {
+        let program = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+        Command::new(program)
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Failed to open file: {}", e))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn show_in_folder(path: String) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut cmd = Command::new("explorer");
+        cmd.args(["/select,", &path]);
+        cmd.creation_flags(0x08000000);
+        cmd.spawn().map_err(|e| format!("Failed to show in folder: {}", e))?;
+    }
+    #[cfg(not(windows))]
+    {
+        let parent = std::path::Path::new(&path)
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
+        let program = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+        Command::new(program)
+            .arg(parent)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_file(path: String) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    if p.exists() {
+        std::fs::remove_file(p).map_err(|e| format!("Failed to delete file: {}", e))?;
+    }
     Ok(())
 }
 
@@ -987,6 +1327,8 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .manage(AppState {
             downloads: Mutex::new(HashMap::new()),
+            processes: Mutex::new(HashMap::new()),
+            tasks: Mutex::new(HashMap::new()),
         })
         .invoke_handler(tauri::generate_handler![
             fetch_video_info,
@@ -996,6 +1338,10 @@ pub fn run() {
             pause_download,
             resume_download,
             cancel_download,
+            retry_download,
+            open_file,
+            show_in_folder,
+            delete_file,
             pick_directory,
             check_dependencies,
         ])
@@ -1015,4 +1361,142 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_find_command_ytdlp() {
+        let ytdlp = find_command("yt-dlp");
+        assert!(ytdlp.is_some(), "yt-dlp should be discoverable in PATH or enhanced paths");
+    }
+
+    #[test]
+    fn test_find_command_ffmpeg() {
+        let ffmpeg = find_command("ffmpeg");
+        assert!(ffmpeg.is_some(), "ffmpeg should be discoverable in PATH or WinGet packages");
+    }
+
+    #[test]
+    fn test_sanitize_filename() {
+        assert_eq!(sanitize_filename("valid_name"), "valid_name");
+        assert_eq!(sanitize_filename("invalid:name*with?bad/chars"), "invalid_name_with_bad_chars");
+        assert_eq!(sanitize_filename("hello <world> | test"), "hello _world_ _ test");
+    }
+
+    #[test]
+    fn test_build_ytdlp_args_video_mode() {
+        let args = build_ytdlp_args(
+            "https://example.com/video",
+            "https://example.com/video",
+            "137+140",
+            "C:/Downloads/%(title)s.%(ext)s",
+            true, // ffmpeg available
+            None,
+            None,
+            None,
+        );
+
+        assert!(args.contains(&"-f".to_string()));
+        assert!(args.contains(&"137+140".to_string()));
+        assert!(args.contains(&"--merge-output-format".to_string()));
+        assert!(args.contains(&"mp4".to_string()));
+        assert!(args.contains(&"--windows-filenames".to_string()));
+        assert!(args.contains(&"--trim-filenames".to_string()));
+        assert!(args.contains(&"160".to_string()));
+        assert!(!args.contains(&"-x".to_string()), "Video mode should not contain audio extract -x");
+    }
+
+    #[test]
+    fn test_build_ytdlp_args_audio_mode() {
+        let args = build_ytdlp_args(
+            "https://example.com/audio",
+            "https://example.com/audio",
+            "audio only",
+            "C:/Downloads/%(title)s.%(ext)s",
+            true, // ffmpeg available
+            None,
+            Some("socks5://127.0.0.1:1080"),
+            Some("C:/wrappers"),
+        );
+
+        assert!(args.contains(&"-x".to_string()), "Audio mode must have -x");
+        assert!(args.contains(&"--audio-format".to_string()));
+        assert!(args.contains(&"mp3".to_string()));
+        assert!(args.contains(&"--audio-quality".to_string()));
+        assert!(args.contains(&"0".to_string()));
+        assert!(!args.contains(&"--merge-output-format".to_string()), "Audio mode must not merge to mp4");
+        assert!(args.contains(&"--proxy".to_string()));
+        assert!(args.contains(&"socks5://127.0.0.1:1080".to_string()));
+        assert!(args.contains(&"--ffmpeg-location".to_string()));
+        assert!(args.contains(&"C:/wrappers".to_string()));
+    }
+
+    #[test]
+    fn test_parse_progress_from_line() {
+        let sample = "[download]  45.2% of ~  24.50MiB at   5.12MiB/s ETA 00:03";
+        let parsed = parse_progress_from_line(sample);
+        assert!(parsed.is_some());
+        let (percent, speed, eta) = parsed.unwrap();
+        assert!((percent - 45.2).abs() < 0.01);
+        assert_eq!(speed, "5.12MiB/s");
+        assert_eq!(eta, "00:03");
+
+        let sample_done = "[download] 100% of 10.00MiB at 8.00MiB/s ETA 00:00";
+        let (percent_done, _, _) = parse_progress_from_line(sample_done).unwrap();
+        assert!((percent_done - 100.0).abs() < 0.01);
+
+        assert!(parse_progress_from_line("Random logger line").is_none());
+    }
+
+    #[test]
+    fn test_parse_destination_from_line() {
+        let dest_line = "[download] Destination: C:\\Users\\test\\Downloads\\video.mp4";
+        assert_eq!(
+            parse_destination_from_line(dest_line),
+            Some("C:\\Users\\test\\Downloads\\video.mp4".to_string())
+        );
+
+        let merger_line = "[Merger] Merging formats into \"C:\\Users\\test\\Downloads\\merged.mp4\"";
+        assert_eq!(
+            parse_destination_from_line(merger_line),
+            Some("C:\\Users\\test\\Downloads\\merged.mp4".to_string())
+        );
+
+        let extract_line = "[ExtractAudio] Destination: C:\\Users\\test\\Downloads\\audio.mp3";
+        assert_eq!(
+            parse_destination_from_line(extract_line),
+            Some("C:\\Users\\test\\Downloads\\audio.mp3".to_string())
+        );
+
+        let already_line = "[download] C:\\Users\\test\\Downloads\\existing.mp4 has already been downloaded";
+        assert_eq!(
+            parse_destination_from_line(already_line),
+            Some("C:\\Users\\test\\Downloads\\existing.mp4".to_string())
+        );
+
+        assert_eq!(parse_destination_from_line("[download]  23.0% of 10MiB"), None);
+    }
+
+    #[test]
+    fn test_process_tree_termination() {
+        // Spawn a real sleeping child process and kill it via taskkill
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            let mut cmd = Command::new("powershell");
+            cmd.args(["-Command", "Start-Sleep -Seconds 30"]);
+            cmd.creation_flags(0x08000000);
+            if let Ok(child) = cmd.spawn() {
+                let pid = child.id();
+                let mut kill_cmd = Command::new("taskkill");
+                kill_cmd.args(["/F", "/T", "/PID", &pid.to_string()]);
+                kill_cmd.creation_flags(0x08000000);
+                let kill_res = kill_cmd.output();
+                assert!(kill_res.is_ok(), "taskkill should succeed");
+            }
+        }
+    }
 }

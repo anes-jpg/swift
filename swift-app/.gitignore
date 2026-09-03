@@ -22,3 +22,16 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Downloads & Temp
+*.part
+*.ytdl
+*.mp4
+*.webm
+*.m4a
+*.mp3
+*.mkv
+*.exe
+*.pdb
+test_*
+

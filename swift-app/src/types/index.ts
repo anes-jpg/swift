@@ -1,53 +1,55 @@
-export interface VideoInfo {
-  url: string;
-  title: string;
-  thumbnail: string;
-  duration: number;
-  uploader: string;
-  upload_date: string;
-  formats: VideoFormat[];
-}
-
 export interface VideoFormat {
   format_id: string;
   ext: string;
   resolution: string;
-  fps: number;
   filesize: number | null;
   vcodec: string;
   acodec: string;
-  quality: number;
-  url: string;
+  fps: number;
+  tbr: number | null;
 }
 
-export interface PlaylistInfo {
-  title: string;
-  uploader: string;
-  count: number;
-  entries: PlaylistEntry[];
-}
-
-export interface PlaylistEntry {
-  url: string;
+export interface VideoInfo {
+  id: string;
   title: string;
   thumbnail: string;
   duration: number;
-  index: number;
+  uploader: string;
+  url: string;
+  formats: VideoFormat[];
+}
+
+export interface PlaylistEntry {
+  id: string;
+  title: string;
+  url: string;
+  duration: number;
+  thumbnail: string;
+  index?: number;
+}
+
+export interface PlaylistInfo {
+  id: string;
+  title: string;
+  uploader: string;
+  entries: PlaylistEntry[];
+  total_count: number;
+  count?: number;
 }
 
 export interface DownloadItem {
   id: string;
-  url: string;
   title: string;
   thumbnail: string;
-  format: VideoFormat;
-  status: DownloadStatus;
+  url: string;
+  format: string;
   progress: number;
+  status: DownloadStatus;
   speed: string;
   eta: string;
   filesize: number;
-  downloaded: number;
-  output_path: string;
+  error?: string;
+  output_path?: string;
 }
 
 export type DownloadStatus =
@@ -61,16 +63,31 @@ export type DownloadStatus =
 
 export interface AppSettings {
   downloadDir: string;
-  theme: "dark" | "light" | "midnight";
-  glassOpacity: number;
-  gradientPreset: string;
   proxy: string;
   maxConcurrent: number;
   noLogMode: boolean;
+  defaultFormat: "best_video" | "best_audio";
+  glassOpacity?: number;
+  theme?: string;
+  gradientPreset?: string;
 }
 
 export interface GradientPreset {
   name: string;
+  label: string;
   colors: string[];
   speed: number;
+}
+
+export interface HistoryItem {
+  id: string;
+  url: string;
+  title: string;
+  thumbnail: string;
+  resolution: string;
+  ext: string;
+  duration?: number;
+  filesize?: number;
+  output_path: string;
+  completed_at: number;
 }

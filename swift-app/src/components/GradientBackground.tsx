@@ -1,5 +1,19 @@
 import { useEffect, useRef } from "react";
 
+interface BlobConfig {
+  cx: number;
+  cy: number;
+  r: number;
+  color: string;
+}
+
+// Pure Black & Red ambient blobs
+const RED_BLOBS: BlobConfig[] = [
+  { cx: 0.28, cy: 0.38, r: 0.48, color: "rgba(220, 38, 38, 0.045)" },
+  { cx: 0.72, cy: 0.62, r: 0.42, color: "rgba(185, 28, 28, 0.035)" },
+  { cx: 0.5, cy: 0.25, r: 0.36, color: "rgba(153, 27, 27, 0.025)" },
+];
+
 export default function GradientBackground() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const mouseRef = useRef({ x: 0.5, y: 0.5 });
@@ -29,24 +43,21 @@ export default function GradientBackground() {
     window.addEventListener("mousemove", onMouseMove);
 
     const draw = () => {
-      timeRef.current += 0.002;
+      timeRef.current += 0.0012;
       const t = timeRef.current;
       const { x: mx, y: my } = mouseRef.current;
       const w = canvas.width;
       const h = canvas.height;
 
+      // Pure deep black obsidian backdrop
       ctx.fillStyle = "#050505";
       ctx.fillRect(0, 0, w, h);
 
-      const blobs = [
-        { cx: 0.3, cy: 0.4, r: 0.35, color: "rgba(180, 0, 0, 0.06)" },
-        { cx: 0.7, cy: 0.6, r: 0.3, color: "rgba(120, 0, 0, 0.04)" },
-        { cx: 0.5, cy: 0.3, r: 0.25, color: "rgba(200, 20, 20, 0.03)" },
-      ];
-
-      for (const blob of blobs) {
-        const cx = w * (blob.cx + 0.05 * Math.sin(t * 0.8) + (mx - 0.5) * 0.06);
-        const cy = h * (blob.cy + 0.05 * Math.cos(t * 0.6) + (my - 0.5) * 0.06);
+      for (let i = 0; i < RED_BLOBS.length; i++) {
+        const blob = RED_BLOBS[i];
+        const phase = i * 1.4;
+        const cx = w * (blob.cx + 0.035 * Math.sin(t * 0.5 + phase) + (mx - 0.5) * 0.025);
+        const cy = h * (blob.cy + 0.035 * Math.cos(t * 0.4 + phase) + (my - 0.5) * 0.025);
         const radius = Math.min(w, h) * blob.r;
 
         const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);

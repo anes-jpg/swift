@@ -27,3 +27,16 @@ desktop.ini
 
 # TypeScript
 tsconfig.tsbuildinfo
+
+# Downloads & Temp
+*.part
+*.ytdl
+*.mp4
+*.webm
+*.m4a
+*.mp3
+*.mkv
+*.exe
+*.pdb
+test_*
+

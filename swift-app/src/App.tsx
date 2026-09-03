@@ -1,14 +1,14 @@
 import { useState, useCallback, useEffect } from "react";
 import GradientBackground from "./components/GradientBackground";
 import Titlebar from "./components/Titlebar";
-import Header from "./components/Header";
-import UrlInput from "./components/UrlInput";
+import Sidebar from "./components/Sidebar";
+import DownloadsWorkspace from "./components/DownloadsWorkspace";
 import QualityPicker from "./components/QualityPicker";
 import PlaylistPicker from "./components/PlaylistPicker";
-import DownloadQueue from "./components/DownloadQueue";
+import Library from "./components/Library";
 import Settings from "./components/Settings";
 import SetupBanner from "./components/SetupBanner";
-import { addDownload, updateDownload } from "./store/downloadStore";
+import { addDownload, updateDownload, getSettings } from "./store/downloadStore";
 import type { VideoInfo, VideoFormat, PlaylistInfo, PlaylistEntry } from "./types";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -21,6 +21,7 @@ interface DownloadProgressEvent {
   speed?: string;
   eta?: string;
   downloaded?: number;
+  output_path?: string;
 }
 
 export default function App() {
@@ -28,27 +29,56 @@ export default function App() {
   const [playlistInfo, setPlaylistInfo] = useState<PlaylistInfo | null>(null);
   const [activeTab, setActiveTab] = useState<"downloads" | "library" | "settings">("downloads");
 
+  // Global desktop keyboard navigation shortcuts
   useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "1") {
+        e.preventDefault();
+        setActiveTab("downloads");
+      } else if ((e.ctrlKey || e.metaKey) && e.key === "2") {
+        e.preventDefault();
+        setActiveTab("library");
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === "3" || e.key === ",")) {
+        e.preventDefault();
+        setActiveTab("settings");
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  useEffect(() => {
+    const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+    if (!isTauri) return;
+
     const unlistenProgress = listen<DownloadProgressEvent>("download-progress", (event) => {
-      const { id, status, progress, speed, eta, downloaded } = event.payload;
+      const { id, status, progress, speed, eta, downloaded, output_path } = event.payload;
       updateDownload(id, {
         status: status as any,
         progress,
         ...(speed && { speed }),
         ...(eta && { eta }),
         ...(downloaded !== undefined && { downloaded }),
+        ...(output_path && { output_path }),
       });
     });
 
     const unlistenExtension = listen<{ url: string; title: string; referer: string }>("extension-quick-download", async (event) => {
       const { url, title, referer } = event.payload;
+      const settings = getSettings();
       try {
         const info = await invoke("fetch_video_info", { url });
         setVideoInfo(info as VideoInfo);
       } catch (err) {
         console.error("Extension fetch failed, falling back to quick download:", err);
         try {
-          await invoke("quick_download", { url, title, referer });
+          await invoke("quick_download", {
+            url,
+            title,
+            referer,
+            downloadDir: settings.downloadDir || null,
+            proxy: settings.proxy || null,
+          });
         } catch (fallbackErr) {
           console.error("Extension fallback download failed:", fallbackErr);
         }
@@ -83,11 +113,14 @@ export default function App() {
   const startVideoDownload = useCallback(
     async (video: VideoInfo, format: VideoFormat) => {
       const id = addDownload(video, format);
+      const settings = getSettings();
       try {
         await invoke("start_download", {
           id,
           url: video.url,
           formatId: format.format_id,
+          downloadDir: settings.downloadDir || null,
+          proxy: settings.proxy || null,
         });
         updateDownload(id, { status: "downloading" });
       } catch (err) {
@@ -141,29 +174,30 @@ export default function App() {
   );
 
   return (
-    <div className="swift-app">
+    <div className="swift-desktop-app">
       <GradientBackground />
 
-      <div className="app-content">
+      <div className="desktop-layout">
         <Titlebar />
-        <Header activeTab={activeTab} onTabChange={setActiveTab} />
 
-        <main className="app-main">
-          <SetupBanner />
-          <UrlInput
-            onVideoFetched={handleVideoFetched}
-            onPlaylistFetched={handlePlaylistFetched}
-          />
+        <div className="desktop-body">
+          <Sidebar activeTab={activeTab} onTabChange={setActiveTab} />
 
-          {activeTab === "downloads" && <DownloadQueue />}
-          {activeTab === "settings" && <Settings />}
-          {activeTab === "library" && (
-            <div className="empty-state">
-              <h3>Library</h3>
-              <p>Coming soon — your download history will appear here</p>
-            </div>
-          )}
-        </main>
+          <main className="desktop-workspace">
+            <SetupBanner />
+
+            {activeTab === "downloads" && (
+              <DownloadsWorkspace
+                onVideoFetched={handleVideoFetched}
+                onPlaylistFetched={handlePlaylistFetched}
+                onNavigateTab={setActiveTab}
+              />
+            )}
+
+            {activeTab === "library" && <Library />}
+            {activeTab === "settings" && <Settings />}
+          </main>
+        </div>
       </div>
 
       {videoInfo && (

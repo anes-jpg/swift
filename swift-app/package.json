@@ -1,12 +1,14 @@
 {
   "name": "swift-app",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
+    "test:pipeline": "node scripts/test_download_pipeline.mjs",
+    "test:store": "node scripts/test_store_mechanics.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",

@@ -1,6 +1,6 @@
 [package]
 name = "swift"
-version = "0.1.0"
+version = "1.2.0"
 description = "Swift — Ultra-Modern Video Downloader"
 authors = ["you"]
 license = ""
