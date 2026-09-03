@@ -132,9 +132,11 @@ export function addDownload(video: VideoInfo, format: VideoFormat): string {
 
 export function updateDownload(id: string, updates: Partial<DownloadItem>) {
   let itemCompleted: DownloadItem | null = null;
+  let found = false;
 
   downloads = downloads.map((item) => {
     if (item.id === id) {
+      found = true;
       const updated = { ...item, ...updates };
       if (updates.status === "completed" && item.status !== "completed") {
         itemCompleted = updated;
@@ -143,6 +145,23 @@ export function updateDownload(id: string, updates: Partial<DownloadItem>) {
     }
     return item;
   });
+
+  if (!found) {
+    const newItem: DownloadItem = {
+      id,
+      title: updates.title || "Video Download",
+      thumbnail: updates.thumbnail || "",
+      url: updates.url || "",
+      format: updates.format || "MP4 (Best)",
+      progress: updates.progress ?? 0,
+      status: updates.status || "downloading",
+      speed: updates.speed || "0 B/s",
+      eta: updates.eta || "--:--",
+      filesize: updates.filesize || 0,
+      output_path: updates.output_path || "",
+    };
+    downloads = [newItem, ...downloads];
+  }
 
   if (itemCompleted && !settings.noLogMode) {
     const item = itemCompleted as DownloadItem;

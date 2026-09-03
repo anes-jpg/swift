@@ -210,26 +210,73 @@
 
   function sendToSwift(btn, streamUrl) {
     const urlToSend = streamUrl || window.location.href;
-    chrome.runtime.sendMessage({
+    const payload = {
       action: 'sendToSwift',
       url: urlToSend,
       title: document.title || 'Video',
       referer: window.location.href
-    }, (res) => {
-      if (res && res.ok) {
-        btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>';
-        setTimeout(() => {
-          btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
-        }, 1500);
-      } else {
-        btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><path d="M15 9l-6 6M9 9l6 6"/></svg>';
-        btn.title = 'Start Swift desktop app';
-        setTimeout(() => {
-          btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
-          btn.title = 'Download with Swift';
-        }, 2500);
-      }
-    });
+    };
+
+    const markSuccess = () => {
+      btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>';
+      btn.title = 'Sent to Swift!';
+      setTimeout(() => {
+        btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
+        btn.title = 'Download with Swift';
+      }, 2000);
+    };
+
+    const markFailure = (err) => {
+      console.warn('[Swift Extension] Download request failed:', err);
+      btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><path d="M15 9l-6 6M9 9l6 6"/></svg>';
+      btn.title = 'Swift not responding - make sure Swift is open';
+      setTimeout(() => {
+        btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
+        btn.title = 'Download with Swift';
+      }, 2500);
+    };
+
+    try {
+      chrome.runtime.sendMessage(payload, (res) => {
+        if (chrome.runtime.lastError || !res || !res.ok) {
+          fetch('http://127.0.0.1:17865/download', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              token: 'swift-local-a7f3e9c2',
+              url: payload.url,
+              title: payload.title,
+              referer: payload.referer
+            })
+          })
+          .then(r => r.json())
+          .then(data => {
+            if (data && data.ok) markSuccess();
+            else markFailure('Server returned not ok');
+          })
+          .catch(markFailure);
+        } else {
+          markSuccess();
+        }
+      });
+    } catch (e) {
+      fetch('http://127.0.0.1:17865/download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: 'swift-local-a7f3e9c2',
+          url: payload.url,
+          title: payload.title,
+          referer: payload.referer
+        })
+      })
+      .then(r => r.json())
+      .then(data => {
+        if (data && data.ok) markSuccess();
+        else markFailure('Server returned not ok');
+      })
+      .catch(markFailure);
+    }
   }
 
   function toggleDropdown() {
@@ -295,10 +342,11 @@
         </div>
       `;
 
-      dropdown.querySelectorAll('.swift-dd-download').forEach(btn => {
-        btn.addEventListener('click', (e) => {
+      dropdown.querySelectorAll('.swift-dd-item').forEach(row => {
+        row.addEventListener('click', (e) => {
           e.stopPropagation();
-          const idx = btn.dataset.i;
+          const btn = row.querySelector('.swift-dd-download') || row;
+          const idx = row.dataset.i;
           if (idx === 'page') {
             sendToSwift(btn, null);
           } else {

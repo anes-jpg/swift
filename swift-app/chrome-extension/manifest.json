@@ -6,7 +6,11 @@
   "permissions": ["activeTab", "scripting", "clipboardWrite", "webRequest", "tabs"],
   "host_permissions": [
     "https://*/*",
-    "http://*/*"
+    "http://*/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*",
+    "http://127.0.0.1:17865/*",
+    "http://localhost:17865/*"
   ],
   "background": {
     "service_worker": "background.js"

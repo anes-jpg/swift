@@ -114,6 +114,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   if (msg.action === 'sendToSwift') {
+    console.log('[Swift Extension] Sending to Swift server:', msg.url);
     fetch(SWIFT_SERVER + '/download', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -123,8 +124,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         title: msg.title || 'Video',
         referer: msg.referer || (sender.tab ? sender.tab.url : '')
       })
-    }).then(() => sendResponse({ ok: true }))
-      .catch(() => sendResponse({ ok: false, error: 'Swift not running' }));
+    })
+    .then(r => r.json())
+    .then(data => {
+      console.log('[Swift Extension] Swift response:', data);
+      sendResponse({ ok: true, data });
+    })
+    .catch(err => {
+      console.error('[Swift Extension] Swift connection error:', err);
+      sendResponse({ ok: false, error: 'Swift not running' });
+    });
     return true;
   }
 });

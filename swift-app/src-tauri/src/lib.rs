@@ -900,17 +900,16 @@ fn start_download(
     Ok(())
 }
 
-#[tauri::command]
-fn quick_download(
+fn perform_quick_download(
     url: String,
     title: String,
     referer: Option<String>,
     download_dir: Option<String>,
     proxy: Option<String>,
-    state: State<'_, AppState>,
-    app: tauri::AppHandle,
+    app: &tauri::AppHandle,
 ) -> Result<String, String> {
     let id = uuid::Uuid::new_v4().to_string();
+    let state = app.state::<AppState>();
 
     {
         let mut downloads = state.downloads.lock().unwrap_or_else(|e| e.into_inner());
@@ -949,6 +948,8 @@ fn quick_download(
         "id": id,
         "status": "downloading",
         "progress": 0.0,
+        "speed": "0 B/s",
+        "eta": "--:--",
     }));
 
     let target_dir = download_dir
@@ -974,7 +975,7 @@ fn quick_download(
         let ffmpeg_available = has_command("ffmpeg");
         
         let format_str = if ffmpeg_available {
-            "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/bestvideo+bestaudio/best".to_string()
+            "bv*+ba/b".to_string()
         } else {
             "best[ext=mp4]/best".to_string()
         };
@@ -995,11 +996,26 @@ fn quick_download(
             "id": id_clone,
             "status": if ok { "completed" } else { "failed" },
             "progress": if ok { 100.0 } else { 0.0 },
+            "speed": "0 B/s",
+            "eta": if ok { "00:00" } else { "--:--" },
             "output_path": out_path,
         }));
     });
 
     Ok(id)
+}
+
+#[tauri::command]
+fn quick_download(
+    url: String,
+    title: String,
+    referer: Option<String>,
+    download_dir: Option<String>,
+    proxy: Option<String>,
+    _state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    perform_quick_download(url, title, referer, download_dir, proxy, &app)
 }
 
 #[tauri::command]
@@ -1262,20 +1278,33 @@ fn handle_http_client(mut stream: std::net::TcpStream, app: tauri::AppHandle) {
 
             let url = json["url"].as_str().unwrap_or("");
             if !url.is_empty() {
-                let title = json["title"].as_str().unwrap_or("Video");
-                let referer = json["referer"].as_str().unwrap_or("");
+                let title = json["title"].as_str().unwrap_or("Video").to_string();
+                let referer = json["referer"].as_str().map(|s| s.to_string());
 
-                let _ = app.emit("extension-quick-download", serde_json::json!({
-                    "url": url,
-                    "title": title,
-                    "referer": referer,
-                }));
+                let download_id = perform_quick_download(
+                    url.to_string(),
+                    title,
+                    referer,
+                    None,
+                    None,
+                    &app,
+                ).unwrap_or_else(|_| "".to_string());
 
-                let response = "HTTP/1.1 200 OK\r\n\
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                }
+
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\n\
                     Access-Control-Allow-Origin: *\r\n\
+                    Access-Control-Allow-Private-Network: true\r\n\
                     Content-Type: application/json\r\n\
                     Connection: close\r\n\r\n\
-                    {\"ok\":true}";
+                    {{\"ok\":true,\"id\":\"{}\"}}",
+                    download_id
+                );
                 let _ = stream.write_all(response.as_bytes());
                 return;
             }
