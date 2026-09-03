@@ -338,10 +338,12 @@ fn ytdlp_download_args(
     ffmpeg_available: bool,
     cookie_browser: Option<&str>,
     proxy: Option<&str>,
-    app: &tauri::AppHandle,
+    _app: &tauri::AppHandle,
 ) -> Vec<String> {
     let ffmpeg_loc = if ffmpeg_available {
-        app.path().app_local_data_dir().ok().map(|d| d.join("wrappers").to_string_lossy().to_string())
+        find_command("ffmpeg").and_then(|p| {
+            std::path::Path::new(&p).parent().map(|d| d.to_string_lossy().to_string())
+        })
     } else {
         None
     };
