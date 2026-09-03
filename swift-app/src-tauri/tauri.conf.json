@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Swift",
         "width": 740,
         "height": 460,
@@ -20,7 +21,8 @@
         "resizable": true,
         "decorations": false,
         "transparent": false,
-        "center": true
+        "center": true,
+        "visible": true
       }
     ],
     "security": {

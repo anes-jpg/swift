@@ -1177,27 +1177,6 @@ fn install_chrome_extension() {
         let _ = std::fs::write(ext_dir.join(name), data);
     }
 
-    #[cfg(windows)]
-    {
-        use std::process::Command;
-        let ext_path = ext_dir.to_string_lossy().replace("\\", "\\\\");
-        let _ = Command::new("reg").args([
-            "add",
-            r#"HKCU\SOFTWARE\Policies\Google\Chrome\ExtensionInstallAllowlist"#,
-            "/v", "1",
-            "/t", "REG_SZ",
-            "/d", &ext_path,
-            "/f",
-        ]).output();
-        let _ = Command::new("reg").args([
-            "add",
-            r#"HKCU\SOFTWARE\Policies\Google\Chrome\ExtensionInstallForcelist"#,
-            "/v", "1",
-            "/t", "REG_SZ",
-            "/d", &format!("{};https://clients2.google.com/service/update2/crx", ext_path),
-            "/f",
-        ]).output();
-    }
 }
 
 #[tauri::command]
@@ -1391,6 +1370,12 @@ pub fn run() {
             install_chrome_extension();
             start_local_server(app.handle().clone());
             spawn_ytdlp_self_update();
+
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
 
             if cfg!(debug_assertions) {
                 app.handle().plugin(
