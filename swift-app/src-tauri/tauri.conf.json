@@ -13,10 +13,10 @@
     "windows": [
       {
         "title": "Swift",
-        "width": 1100,
-        "height": 740,
-        "minWidth": 800,
-        "minHeight": 560,
+        "width": 740,
+        "height": 460,
+        "minWidth": 520,
+        "minHeight": 340,
         "resizable": true,
         "decorations": false,
         "transparent": false,

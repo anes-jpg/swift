@@ -2718,16 +2718,16 @@
 /* ── Native Desktop Sidebar ── */
 
 .app-sidebar {
-  width: 220px;
+  width: 155px;
   flex-shrink: 0;
-  background: rgba(14, 14, 18, 0.75);
+  background: rgba(12, 12, 16, 0.85);
   backdrop-filter: blur(28px);
   -webkit-backdrop-filter: blur(28px);
   border-right: 1px solid rgba(255, 255, 255, 0.07);
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  padding: 14px 10px 12px 10px;
+  padding: 10px 8px 8px 8px;
   user-select: none;
   z-index: 5;
 }
@@ -2949,12 +2949,11 @@
 }
 
 .workspace-container {
-  padding: 24px 32px;
+  padding: 12px 16px;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 10px;
   width: 100%;
-  max-width: 1200px;
   user-select: text;
 }
 
@@ -3243,9 +3242,9 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 44px 24px;
+  padding: 24px 16px;
   border: 1px dashed rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
+  border-radius: 10px;
   text-align: center;
   gap: 6px;
   background: rgba(14, 14, 18, 0.2);
@@ -4018,131 +4017,134 @@
   background: #020204 !important;
 }
 
-/* ── Top Bar & Floating Nav Island ── */
+/* ── Ona-Style Title Bar & Floating Icon Dock ── */
 
 .ona-topbar {
-  height: 48px;
+  position: relative;
+  height: 42px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 16px;
   user-select: none;
   z-index: 50;
-  background: rgba(4, 4, 6, 0.9);
-  backdrop-filter: blur(28px);
-  -webkit-backdrop-filter: blur(28px);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  background: #000000;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .topbar-left {
   display: flex;
   align-items: center;
+  z-index: 2;
 }
 
-.brand-pill {
+/* Framed brand badge matching Ona's "[ona.]" */
+.ona-brand-badge {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 12px;
-  background: rgba(220, 38, 38, 0.12);
-  border: 1px solid rgba(220, 38, 38, 0.35);
-  border-radius: 20px;
+  gap: 6px;
+  padding: 3px 9px;
+  background: rgba(220, 38, 38, 0.15);
+  border: 1px solid rgba(220, 38, 38, 0.6);
+  border-radius: 6px;
   color: #ffffff;
   font-weight: 700;
   font-size: 13px;
   letter-spacing: -0.2px;
-  box-shadow: 0 0 12px rgba(220, 38, 38, 0.2);
+  box-shadow: 0 0 12px rgba(220, 38, 38, 0.25);
+  cursor: default;
 }
 
-.brand-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #ef4444;
-  box-shadow: 0 0 8px #ef4444;
+.brand-bolt {
+  flex-shrink: 0;
 }
 
-.brand-text {
+.brand-name {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   color: #ffffff;
+  line-height: 1;
 }
 
+/* Ona floating icon dock pill - horizontally centered */
 .topbar-center {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
   align-items: center;
   justify-content: center;
+  z-index: 10;
 }
 
-.nav-island {
+.ona-icon-dock {
   display: flex;
+  flex-direction: row;
   align-items: center;
   gap: 3px;
-  padding: 3px;
-  background: rgba(18, 18, 24, 0.85);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 24px;
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
+  padding: 3px 6px;
+  background: #09090d;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 20px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
   -webkit-app-region: no-drag;
 }
 
-.nav-island-btn {
+.dock-icon-btn {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid transparent;
+  background: none;
+  color: #82828e;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 14px;
-  border-radius: 18px;
-  border: none;
-  background: none;
-  color: #a1a1aa;
-  font-size: 12px;
-  font-weight: 500;
+  justify-content: center;
   cursor: pointer;
   transition: all 0.15s ease;
+  padding: 0;
 }
 
-.nav-island-btn svg {
-  width: 14px;
-  height: 14px;
-  opacity: 0.8;
-}
-
-.nav-island-btn:hover {
+.dock-icon-btn:hover {
   color: #ffffff;
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.08);
 }
 
-.nav-island-btn.active {
-  background: #dc2626;
-  color: #ffffff;
-  font-weight: 600;
-  box-shadow: 0 0 12px rgba(220, 38, 38, 0.5);
+.dock-icon-btn.active {
+  background: rgba(220, 38, 38, 0.22);
+  color: #ef4444;
+  border-color: rgba(220, 38, 38, 0.6);
+  box-shadow: 0 0 12px rgba(220, 38, 38, 0.4);
 }
 
-.nav-island-btn.active svg {
-  opacity: 1;
+.dock-svg {
+  width: 15px;
+  height: 15px;
 }
 
-.nav-island-divider {
+.dock-divider {
   width: 1px;
-  height: 16px;
+  height: 14px;
   background: rgba(255, 255, 255, 0.1);
-  margin: 0 2px;
+  margin: 0 4px;
 }
 
-.nav-island-badge {
-  font-size: 10px;
-  font-family: 'JetBrains Mono', monospace;
-  background: rgba(0, 0, 0, 0.4);
-  padding: 1px 6px;
-  border-radius: 10px;
-  color: #ffffff;
+.dock-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #ef4444;
+  box-shadow: 0 0 6px #ef4444;
 }
 
 .topbar-right {
   display: flex;
   align-items: center;
+  z-index: 2;
+  margin-left: auto;
 }
 
 .window-controls {
