@@ -5,6 +5,7 @@ const SWIFT_TOKEN = 'swift-local-a7f3e9c2';
 const mediaUrls = new Map();
 
 const M3U8_PATTERN = /\.m3u8(\?|$)/i;
+const MPD_PATTERN = /\.mpd(\?|$)/i;
 const TS_PATTERN = /\.ts(\?|$)/i;
 const VIDEO_EXTENSIONS = /\.(mp4|webm|mkv|avi|mov|flv|m4v)(\?|$)/i;
 const AUDIO_EXTENSIONS = /\.(mp3|wav|ogg|m4a|aac|flac)(\?|$)/i;
@@ -17,9 +18,9 @@ const VIDEO_HOSTS = [
 
 function isMediaRequest(url) {
   if (!url || url.length > 2000 || url.startsWith('data:') || url.startsWith('blob:')) return false;
-  if (url.includes('youtube.com') || url.includes('youtu.be')) return false;
   if (url.includes('googlevideo.com/videoplayback')) return false;
   if (M3U8_PATTERN.test(url)) return true;
+  if (MPD_PATTERN.test(url)) return true;
   if (VIDEO_EXTENSIONS.test(url)) return true;
   if (AUDIO_EXTENSIONS.test(url)) return true;
   const l = url.toLowerCase();
@@ -37,6 +38,7 @@ function formatSize(bytes) {
 
 function getExt(url) {
   if (M3U8_PATTERN.test(url)) return 'm3u8';
+  if (MPD_PATTERN.test(url)) return 'mpd';
   if (TS_PATTERN.test(url)) return 'ts';
   const m = url.match(/\.(\w{2,5})(?:\?|$)/);
   return m ? m[1].toLowerCase() : 'mp4';
@@ -50,13 +52,13 @@ function getType(url) {
 chrome.webRequest.onHeadersReceived.addListener(
   (details) => {
     if (details.tabId < 0) return;
-    
-    // Explicitly ignore YouTube requests at the network level too
-    if (details.url.includes('youtube.com') || details.url.includes('youtu.be')) return;
 
     const contentTypeHeader = details.responseHeaders?.find(h => h.name.toLowerCase() === 'content-type');
     const contentType = contentTypeHeader ? contentTypeHeader.value.toLowerCase() : '';
-    const isMediaContent = contentType.startsWith('video/') || contentType.startsWith('audio/') || contentType === 'application/vnd.apple.mpegurl';
+    const isMediaContent = contentType.startsWith('video/') ||
+      contentType.startsWith('audio/') ||
+      contentType === 'application/vnd.apple.mpegurl' ||
+      contentType === 'application/dash+xml';
 
     if (!isMediaContent && !isMediaRequest(details.url)) return;
 
@@ -115,7 +117,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     fetch(SWIFT_SERVER + '/download', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token: SWIFT_TOKEN, url: msg.url, title: msg.title || 'Video', referer: msg.referer || '' })
+      body: JSON.stringify({
+        token: SWIFT_TOKEN,
+        url: msg.url,
+        title: msg.title || 'Video',
+        referer: msg.referer || (sender.tab ? sender.tab.url : '')
+      })
     }).then(() => sendResponse({ ok: true }))
       .catch(() => sendResponse({ ok: false, error: 'Swift not running' }));
     return true;

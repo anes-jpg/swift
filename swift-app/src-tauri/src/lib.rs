@@ -1146,8 +1146,6 @@ fn install_chrome_extension() {
     if local_app_data.is_empty() { return; }
 
     let ext_dir = std::path::PathBuf::from(&local_app_data).join("Swift").join("Extension");
-    if ext_dir.exists() { return; }
-
     let _ = std::fs::create_dir_all(&ext_dir);
 
     let files: Vec<(&str, &[u8])> = vec![
@@ -1185,6 +1183,14 @@ fn install_chrome_extension() {
             "/f",
         ]).output();
     }
+}
+
+#[tauri::command]
+fn get_extension_dir() -> Result<String, String> {
+    let local_app_data = std::env::var("LOCALAPPDATA").map_err(|e| e.to_string())?;
+    let ext_dir = std::path::PathBuf::from(&local_app_data).join("Swift").join("Extension");
+    install_chrome_extension();
+    Ok(ext_dir.to_string_lossy().to_string())
 }
 
 fn start_local_server(app: tauri::AppHandle) {
@@ -1344,6 +1350,7 @@ pub fn run() {
             delete_file,
             pick_directory,
             check_dependencies,
+            get_extension_dir,
         ])
         .setup(|app| {
             install_chrome_extension();

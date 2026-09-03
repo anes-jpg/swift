@@ -221,6 +221,50 @@ export default function Settings() {
             </div>
           </div>
         </section>
+
+        {/* Section 4: Browser Integration (IDM-Style) */}
+        <section className="pref-section">
+          <div className="pref-section-title">Browser Integration (IDM-Style)</div>
+
+          <div className="pref-row">
+            <div className="pref-label-col">
+              <span className="pref-label">Chrome & Edge Extension</span>
+              <span className="pref-desc">
+                Sniffs video streams in real-time and overlays a 1-click floating "Download" badge
+              </span>
+            </div>
+            <div className="pref-control-col">
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={async () => {
+                  if (!isTauri) return;
+                  try {
+                    const dir = await invoke<string>("get_extension_dir");
+                    if (dir) invoke("open_file", { path: dir });
+                  } catch {}
+                }}
+              >
+                Reveal Extension Folder
+              </button>
+            </div>
+          </div>
+
+          <div className="pref-row">
+            <div className="pref-label-col">
+              <span className="pref-label">Local IPC Server</span>
+              <span className="pref-desc">
+                Instant stream capture listener on 127.0.0.1:17865
+              </span>
+            </div>
+            <div className="pref-control-col">
+              <span className="engine-badge ready" style={{ display: "inline-flex", fontSize: "11px" }}>
+                <span className="engine-dot" />
+                Listening (Ready)
+              </span>
+            </div>
+          </div>
+        </section>
       </div>
     </div>
   );
