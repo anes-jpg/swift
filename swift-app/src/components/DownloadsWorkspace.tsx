@@ -1,205 +1,231 @@
-import { useState, useRef, useCallback, useSyncExternalStore } from "react";
+import { useState, useSyncExternalStore } from "react";
 import {
-  getSettings,
-  updateSettings,
   getDownloads,
   getHistory,
   subscribe,
-  removeDownload,
+  addDownload,
   clearCompleted,
+  updateDownload,
+  getSettings,
+  removeFromHistory,
 } from "../store/downloadStore";
-import { invoke } from "@tauri-apps/api/core";
 import DownloadItemCard from "./DownloadItem";
-import type { VideoInfo, PlaylistInfo } from "../types";
+import type { VideoInfo, PlaylistInfo, VideoFormat } from "../types";
+import { invoke } from "@tauri-apps/api/core";
 
-interface Props {
-  onVideoFetched: (info: VideoInfo) => void;
-  onPlaylistFetched: (info: PlaylistInfo) => void;
-  onNavigateTab: (tab: "downloads" | "library" | "settings") => void;
-}
-
-function isPlaylistUrl(url: string): boolean {
-  const lower = url.toLowerCase();
-  return (
-    lower.includes("playlist?list=") ||
-    lower.includes("&list=") ||
-    lower.includes("/playlist/") ||
-    lower.includes("mix=")
-  );
-}
-
-function formatBytes(bytes?: number | null): string {
-  if (!bytes) return "0 B";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(1)} MB`;
-  return `${(bytes / 1073741824).toFixed(2)} GB`;
+interface DownloadsWorkspaceProps {
+  onNavigateLibrary: () => void;
+  searchFilter?: string;
+  onVideoFetched?: (info: VideoInfo) => void;
+  onPlaylistFetched?: (info: PlaylistInfo) => void;
 }
 
 export default function DownloadsWorkspace({
-  onVideoFetched,
+  onNavigateLibrary,
+  searchFilter = "",
   onPlaylistFetched,
-  onNavigateTab,
-}: Props) {
-  const settings = useSyncExternalStore(subscribe, getSettings);
+}: DownloadsWorkspaceProps) {
   const downloads = useSyncExternalStore(subscribe, getDownloads);
   const history = useSyncExternalStore(subscribe, getHistory);
+  const settings = useSyncExternalStore(subscribe, getSettings);
 
   const [url, setUrl] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [pasted, setPasted] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [formatMode, setFormatMode] = useState<"video" | "audio">("video");
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [justPasted, setJustPasted] = useState(false);
 
   const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
-  const handleSubmit = useCallback(
-    async (overrideUrl?: string) => {
-      const targetUrl = (overrideUrl || url).trim();
-      if (!targetUrl) return;
-
-      setLoading(true);
-      setError("");
-
-      try {
-        const timeout = new Promise<never>((_, reject) =>
-          setTimeout(
-            () =>
-              reject(
-                new Error("Request timed out. Please check network or URL.")
-              ),
-            30000
-          )
-        );
-
-        if (isPlaylistUrl(targetUrl)) {
-          const info = await Promise.race([
-            invoke<PlaylistInfo>("fetch_playlist_info", { url: targetUrl }),
-            timeout,
-          ]);
-          onPlaylistFetched(info);
-        } else {
-          const info = await Promise.race([
-            invoke<VideoInfo>("fetch_video_info", { url: targetUrl }),
-            timeout,
-          ]);
-          onVideoFetched(info);
-        }
-        setUrl("");
-      } catch (err: any) {
-        setError(err?.toString() ?? "Failed to fetch stream");
-      } finally {
-        setLoading(false);
-      }
-    },
-    [url, onVideoFetched, onPlaylistFetched]
+  const activeDownloads = downloads.filter(
+    (d) => d.status === "downloading" || d.status === "fetching" || d.status === "queued"
   );
+  const completedDownloads = downloads.filter((d) => d.status === "completed");
+
+  const filteredDownloads = downloads.filter((d) => {
+    if (!searchFilter.trim()) return true;
+    return (
+      d.title.toLowerCase().includes(searchFilter.toLowerCase()) ||
+      d.url.toLowerCase().includes(searchFilter.toLowerCase())
+    );
+  });
+
+  const recentHistory = history.slice(0, 6);
 
   const handlePaste = async () => {
     try {
       const text = await navigator.clipboard.readText();
-      if (text && /https?:\/\//.test(text.trim())) {
-        const cleaned = text.trim();
-        setUrl(cleaned);
-        setPasted(true);
-        setTimeout(() => setPasted(false), 1200);
-        handleSubmit(cleaned);
-      } else {
-        setError("Clipboard does not contain a valid URL");
-        setTimeout(() => setError(""), 3000);
-      }
-    } catch {
-      inputRef.current?.focus();
-    }
-  };
-
-  const openFolder = async () => {
-    if (!isTauri) return;
-    try {
-      if (settings.downloadDir) {
-        await invoke("open_file", { path: settings.downloadDir });
-      } else {
-        const dir = await invoke<string>("pick_directory");
-        if (dir) {
-          updateSettings({ downloadDir: dir });
-          await invoke("open_file", { path: dir });
-        }
+      if (text && text.trim().startsWith("http")) {
+        setUrl(text.trim());
+        setJustPasted(true);
+        setTimeout(() => setJustPasted(false), 1500);
       }
     } catch {}
   };
 
-  const activeDownloads = downloads.filter(
-    (d) => d.status === "downloading" || d.status === "converting"
-  );
-  const completedDownloads = downloads.filter((d) => d.status === "completed");
-  const recentItems = history.slice(0, 3);
+  const handleDownload = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const targetUrl = url.trim();
+    if (!targetUrl) return;
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      if (targetUrl.includes("playlist") || targetUrl.includes("&list=")) {
+        const info = await invoke<PlaylistInfo>("fetch_playlist_info", { url: targetUrl });
+        if (onPlaylistFetched) {
+          onPlaylistFetched(info);
+          setUrl("");
+        }
+      } else {
+        const info = await invoke<VideoInfo>("fetch_video_info", { url: targetUrl });
+
+        let chosenFormat: VideoFormat | undefined;
+        if (formatMode === "audio") {
+          chosenFormat = {
+            format_id: "bestaudio",
+            ext: "mp3",
+            resolution: "Audio (320kbps)",
+            filesize: null,
+            vcodec: "none",
+            acodec: "mp3",
+            fps: 0,
+            tbr: 320,
+          };
+        } else {
+          chosenFormat = info.formats.find(
+            (f) => f.format_id === "best" || f.vcodec !== "none"
+          ) || {
+            format_id: "best",
+            ext: "mp4",
+            resolution: "Best Available",
+            filesize: null,
+            vcodec: "auto",
+            acodec: "auto",
+            fps: 0,
+            tbr: null,
+          };
+        }
+
+        const downloadId = addDownload(info, chosenFormat);
+        setUrl("");
+
+        if (isTauri) {
+          invoke("start_download", {
+            id: downloadId,
+            url: targetUrl,
+            formatId: chosenFormat.format_id,
+            downloadDir: settings.downloadDir || null,
+            proxy: settings.proxy || null,
+          }).catch((err: any) => {
+            updateDownload(downloadId, {
+              status: "failed",
+              error: String(err),
+            });
+          });
+        }
+      }
+    } catch (err: any) {
+      setError(String(err));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleCancelItem = (id: string) => {
+    if (isTauri) {
+      invoke("cancel_download", { id }).catch(() => {});
+    }
+    updateDownload(id, { status: "failed", error: "Cancelled by user" });
+  };
+
+  const handlePauseItem = (id: string) => {
+    if (isTauri) {
+      invoke("cancel_download", { id }).catch(() => {});
+    }
+    updateDownload(id, { status: "paused" });
+  };
+
+  const handleResumeItem = (item: any) => {
+    updateDownload(item.id, { status: "downloading" });
+    if (isTauri) {
+      invoke("start_download", {
+        id: item.id,
+        url: item.url,
+        formatId: item.format?.format_id || "best",
+        downloadDir: settings.downloadDir || null,
+        proxy: settings.proxy || null,
+      }).catch((err: any) => {
+        updateDownload(item.id, { status: "failed", error: String(err) });
+      });
+    }
+  };
+
+  const handlePlayMedia = (item: any) => {
+    if (!isTauri || !item.output_path) return;
+    invoke("open_file", { path: item.output_path }).catch(() => {});
+  };
+
+  const handleRevealMedia = (item: any) => {
+    if (!isTauri || !item.output_path) return;
+    invoke("show_item_in_folder", { path: item.output_path }).catch(() => {});
+  };
+
+  const openDownloadDir = async () => {
+    if (!isTauri) return;
+    try {
+      if (settings.downloadDir) {
+        await invoke("open_file", { path: settings.downloadDir });
+      }
+    } catch {}
+  };
 
   return (
     <div className="workspace-container">
-      {/* ── Native Command Bar Ingestion ── */}
+      {/* Native Command Bar Ingestion */}
       <section className="command-bar-card">
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            handleSubmit();
-          }}
-          className="command-bar-form"
-        >
+        <form className="command-bar-form" onSubmit={handleDownload}>
           <div className="command-input-wrapper">
-            <svg
-              className="command-icon"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={2}
-            >
-              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
-              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="command-icon">
+              <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71" />
+              <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71" />
             </svg>
 
             <input
-              ref={inputRef}
               type="text"
+              placeholder="Paste video or audio link (YouTube, TikTok, X, Twitch, Instagram...)"
               value={url}
               onChange={(e) => setUrl(e.target.value)}
-              placeholder="Paste or type URL (YouTube, Twitter/X, TikTok, Instagram, Vimeo)..."
               className="command-input"
-              disabled={loading}
               autoFocus
             />
 
             <button
               type="button"
-              className={`command-btn-paste ${pasted ? "pasted" : ""}`}
+              className={`command-btn-paste ${justPasted ? "pasted" : ""}`}
               onClick={handlePaste}
-              title="Paste from Clipboard"
+              title="Paste from clipboard (Ctrl+V)"
             >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
-                <rect x="8" y="2" width="8" height="4" rx="1" ry="1" />
+                <path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2" />
+                <rect x="8" y="2" width="8" height="4" rx="1" />
               </svg>
-              <span>{pasted ? "Pasted" : "Paste"}</span>
+              <span>{justPasted ? "Pasted!" : "Paste"}</span>
             </button>
 
-            {/* Format toggle inline */}
             <div className="command-format-toggle">
               <button
                 type="button"
-                className={`format-toggle-btn ${
-                  settings.defaultFormat === "best_video" ? "selected" : ""
-                }`}
-                onClick={() => updateSettings({ defaultFormat: "best_video" })}
-                title="Download Best Video (MP4)"
+                className={`format-toggle-btn ${formatMode === "video" ? "selected" : ""}`}
+                onClick={() => setFormatMode("video")}
               >
                 MP4
               </button>
               <button
                 type="button"
-                className={`format-toggle-btn ${
-                  settings.defaultFormat === "best_audio" ? "selected" : ""
-                }`}
-                onClick={() => updateSettings({ defaultFormat: "best_audio" })}
-                title="Extract Audio (MP3)"
+                className={`format-toggle-btn ${formatMode === "audio" ? "selected" : ""}`}
+                onClick={() => setFormatMode("audio")}
               >
                 MP3
               </button>
@@ -208,15 +234,16 @@ export default function DownloadsWorkspace({
             <button
               type="submit"
               className="command-submit-btn"
-              disabled={loading || !url.trim()}
+              disabled={!url.trim() || isLoading}
             >
-              {loading ? (
-                <div className="command-spinner" />
+              {isLoading ? (
+                <span className="command-spinner" />
               ) : (
                 <>
                   <span>Download</span>
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                    <path d="M5 12h14M12 5l7 7-7 7" />
+                    <line x1="12" y1="5" x2="12" y2="19" />
+                    <polyline points="19 12 12 19 5 12" />
                   </svg>
                 </>
               )}
@@ -227,17 +254,16 @@ export default function DownloadsWorkspace({
         {error && <div className="command-error-row">{error}</div>}
       </section>
 
-      {/* ── Native Telemetry Bar ── */}
-      <div className="desktop-status-strip">
+      {/* Desktop Status Strip */}
+      <section className="desktop-status-strip">
         <div className="status-strip-item">
-          <span className="status-label">Active Transfers:</span>
-          <span className="status-value">
-            {activeDownloads.length > 0 ? (
-              <span className="active-tag">{activeDownloads.length} active</span>
-            ) : (
-              "Idle"
-            )}
-          </span>
+          <span className="status-label">Engine:</span>
+          <span className="status-value active-tag">yt-dlp Ready</span>
+        </div>
+
+        <div className="status-strip-item">
+          <span className="status-label">Active:</span>
+          <span className="status-value">{activeDownloads.length}</span>
         </div>
 
         <div className="status-strip-item">
@@ -245,164 +271,156 @@ export default function DownloadsWorkspace({
           <span className="status-value">{settings.maxConcurrent} slots</span>
         </div>
 
-        <div className="status-strip-item folder-item" onClick={openFolder} title="Click to open download folder">
+        <div
+          className="status-strip-item folder-item"
+          onClick={openDownloadDir}
+          title="Open Destination Folder"
+        >
           <span className="status-label">Destination:</span>
-          <span className="status-value folder-val">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+          <span className="folder-val">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}>
+              <path d="M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H9L7 3H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
             </svg>
-            {settings.downloadDir ? settings.downloadDir : "System Downloads"}
+            <span>{settings.downloadDir || "Default Downloads"}</span>
           </span>
         </div>
-      </div>
 
-      {/* ── Active Downloads Queue ── */}
-      <section className="desktop-queue-section">
-        <div className="section-header-row">
-          <div className="section-header-left">
-            <h3>Queue</h3>
-            <span className="section-count">{downloads.length}</span>
-          </div>
-
-          {completedDownloads.length > 0 && (
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              onClick={clearCompleted}
-            >
-              Clear Completed ({completedDownloads.length})
-            </button>
-          )}
-        </div>
-
-        {downloads.length === 0 ? (
-          <div className="desktop-empty-state">
-            <div className="empty-symbol">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                <polyline points="7 10 12 15 17 10" />
-                <line x1="12" y1="15" x2="12" y2="3" />
-              </svg>
-            </div>
-            <h4>No active downloads</h4>
-            <p>Paste any URL above or press Ctrl+V to start downloading</p>
-          </div>
-        ) : (
-          <div className="desktop-queue-list">
-            {downloads.map((item) => (
-              <DownloadItemCard
-                key={item.id}
-                item={item}
-                onPause={() => {
-                  if (isTauri) invoke("pause_download", { id: item.id });
-                }}
-                onResume={() => {
-                  if (isTauri) invoke("resume_download", { id: item.id });
-                }}
-                onCancel={() => {
-                  if (isTauri) invoke("cancel_download", { id: item.id });
-                  removeDownload(item.id);
-                }}
-                onRetry={() => {
-                  if (isTauri) invoke("retry_download", { id: item.id });
-                }}
-              />
-            ))}
-          </div>
+        {completedDownloads.length > 0 && (
+          <button
+            type="button"
+            className="btn-clear-completed"
+            onClick={clearCompleted}
+          >
+            Clear Finished
+          </button>
         )}
       </section>
 
-      {/* ── Recent Media Shelf ── */}
-      {recentItems.length > 0 && (
-        <section className="desktop-recent-shelf">
+      {/* Active Queue Section */}
+      {filteredDownloads.length > 0 && (
+        <section className="desktop-queue-section">
           <div className="section-header-row">
             <div className="section-header-left">
-              <h3>Recently Completed</h3>
-              <span className="section-count">{history.length}</span>
+              <h3>Active Ingestion Queue</h3>
+              <span className="section-count">{filteredDownloads.length}</span>
+            </div>
+          </div>
+
+          <div className="queue-items-list">
+            {filteredDownloads.map((item) => (
+              <DownloadItemCard
+                key={item.id}
+                item={item}
+                onPause={() => handlePauseItem(item.id)}
+                onResume={() => handleResumeItem(item)}
+                onCancel={() => handleCancelItem(item.id)}
+                onRetry={() => handleResumeItem(item)}
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Recent Downloads Shelf */}
+      {recentHistory.length > 0 && (
+        <section className="recent-shelf-section">
+          <div className="section-header-row">
+            <div className="section-header-left">
+              <h3>Recent Downloads</h3>
+              <span className="section-count">{recentHistory.length}</span>
             </div>
             <button
               type="button"
-              className="shelf-all-btn"
-              onClick={() => onNavigateTab("library")}
+              className="shelf-view-all-btn"
+              onClick={onNavigateLibrary}
             >
-              Open Library →
+              View Library →
             </button>
           </div>
 
-          <div className="desktop-recent-grid">
-            {recentItems.map((item) => (
-              <div key={item.id} className="desktop-recent-card">
-                <div
-                  className="recent-card-thumb-wrap"
-                  onClick={() => {
-                    if (item.output_path && isTauri) {
-                      invoke("open_file", { path: item.output_path });
-                    }
-                  }}
-                  title="Click to play"
-                >
+          <div className="recent-grid">
+            {recentHistory.map((item) => (
+              <div key={item.id} className="recent-card">
+                <div className="recent-card-thumb-wrap">
                   {item.thumbnail ? (
-                    <img src={item.thumbnail} alt="" className="recent-card-thumb" />
+                    <img src={item.thumbnail} alt={item.title} className="recent-card-thumb" />
                   ) : (
-                    <div className="recent-thumb-fallback">
-                      <svg viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M8 5v14l11-7z" />
-                      </svg>
+                    <div className="recent-card-thumb-fallback">
+                      <span>{item.ext.toUpperCase()}</span>
                     </div>
                   )}
-                  <div className="recent-card-play-overlay">
-                    <svg viewBox="0 0 24 24" fill="currentColor">
-                      <path d="M8 5v14l11-7z" />
-                    </svg>
-                  </div>
+                  <span className="recent-card-ext-badge">{item.ext.toUpperCase()}</span>
                 </div>
 
-                <div className="recent-card-details">
-                  <span className="recent-card-title" title={item.title}>
+                <div className="recent-card-meta">
+                  <h5 className="recent-card-title" title={item.title}>
                     {item.title}
-                  </span>
-                  <div className="recent-card-meta">
-                    <span className="recent-tag ext">{item.ext.toUpperCase()}</span>
-                    <span className="recent-tag size">{formatBytes(item.filesize)}</span>
-                    {item.resolution && (
-                      <span className="recent-tag res">{item.resolution}</span>
+                  </h5>
+                  <div className="recent-card-sub">
+                    <span>{item.resolution}</span>
+                    {(item.filesize ?? 0) > 0 && (
+                      <>
+                        <span>•</span>
+                        <span>{((item.filesize ?? 0) / 1048576).toFixed(1)} MB</span>
+                      </>
                     )}
                   </div>
                 </div>
 
                 <div className="recent-card-actions">
+                  {item.output_path && (
+                    <>
+                      <button
+                        type="button"
+                        className="recent-action-icon-btn"
+                        onClick={() => handlePlayMedia(item)}
+                        title="Play"
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                          <polygon points="5 3 19 12 5 21 5 3" />
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        className="recent-action-icon-btn"
+                        onClick={() => handleRevealMedia(item)}
+                        title="Show in folder"
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                          <path d="M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H9L7 3H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                        </svg>
+                      </button>
+                    </>
+                  )}
                   <button
                     type="button"
-                    className="recent-action-icon"
-                    onClick={() => {
-                      if (item.output_path && isTauri) {
-                        invoke("open_file", { path: item.output_path });
-                      }
-                    }}
-                    title="Play Media"
+                    className="recent-action-icon-btn delete"
+                    onClick={() => removeFromHistory(item.id)}
+                    title="Remove from history"
                   >
-                    <svg viewBox="0 0 24 24" fill="currentColor">
-                      <path d="M8 5v14l11-7z" />
-                    </svg>
-                  </button>
-                  <button
-                    type="button"
-                    className="recent-action-icon"
-                    onClick={() => {
-                      if (item.output_path && isTauri) {
-                        invoke("show_in_folder", { path: item.output_path });
-                      }
-                    }}
-                    title="Show in Explorer"
-                  >
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-                    </svg>
+                    ×
                   </button>
                 </div>
               </div>
             ))}
           </div>
+        </section>
+      )}
+
+      {/* Empty State */}
+      {downloads.length === 0 && recentHistory.length === 0 && (
+        <section className="desktop-empty-state">
+          <div className="empty-state-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+              <path d="M12 3v12m0 0l4-4m-4 4l-4-4" />
+              <path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" />
+            </svg>
+          </div>
+          <h4>No Active Downloads</h4>
+          <p>Paste a video or playlist URL above to begin downloading.</p>
+          <button type="button" className="empty-paste-btn" onClick={handlePaste}>
+            Paste URL from Clipboard (Ctrl+V)
+          </button>
         </section>
       )}
     </div>

@@ -1,6 +1,6 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useSyncExternalStore } from "react";
 import GradientBackground from "./components/GradientBackground";
-import Titlebar from "./components/Titlebar";
+import TopNavIsland from "./components/TopNavIsland";
 import Sidebar from "./components/Sidebar";
 import DownloadsWorkspace from "./components/DownloadsWorkspace";
 import QualityPicker from "./components/QualityPicker";
@@ -8,7 +8,7 @@ import PlaylistPicker from "./components/PlaylistPicker";
 import Library from "./components/Library";
 import Settings from "./components/Settings";
 import SetupBanner from "./components/SetupBanner";
-import { addDownload, updateDownload, getSettings } from "./store/downloadStore";
+import { addDownload, updateDownload, getSettings, getDownloads, subscribe } from "./store/downloadStore";
 import type { VideoInfo, VideoFormat, PlaylistInfo, PlaylistEntry } from "./types";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -25,9 +25,15 @@ interface DownloadProgressEvent {
 }
 
 export default function App() {
+  const downloads = useSyncExternalStore(subscribe, getDownloads);
   const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null);
   const [playlistInfo, setPlaylistInfo] = useState<PlaylistInfo | null>(null);
   const [activeTab, setActiveTab] = useState<"downloads" | "library" | "settings">("downloads");
+  const [searchFilter, setSearchFilter] = useState("");
+
+  const activeCount = downloads.filter(
+    (d) => d.status === "downloading" || d.status === "fetching" || d.status === "queued"
+  ).length;
 
   // Global desktop keyboard navigation shortcuts
   useEffect(() => {
@@ -102,17 +108,12 @@ export default function App() {
     };
   }, []);
 
-  const handleVideoFetched = useCallback((info: VideoInfo) => {
-    setVideoInfo(info);
-  }, []);
-
-  const handlePlaylistFetched = useCallback((info: PlaylistInfo) => {
-    setPlaylistInfo(info);
-  }, []);
-
   const startVideoDownload = useCallback(
     async (video: VideoInfo, format: VideoFormat) => {
       const id = addDownload(video, format);
+      const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+      if (!isTauri) return;
+
       const settings = getSettings();
       try {
         await invoke("start_download", {
@@ -122,10 +123,11 @@ export default function App() {
           downloadDir: settings.downloadDir || null,
           proxy: settings.proxy || null,
         });
-        updateDownload(id, { status: "downloading" });
       } catch (err) {
-        updateDownload(id, { status: "failed" });
-        console.error("Download failed:", err);
+        updateDownload(id, {
+          status: "failed",
+          error: String(err),
+        });
       }
     },
     []
@@ -174,23 +176,35 @@ export default function App() {
   );
 
   return (
-    <div className="swift-desktop-app">
+    <div className="swift-desktop-app ona-theme">
       <GradientBackground />
 
       <div className="desktop-layout">
-        <Titlebar />
+        {/* Ona Floating Top Nav Island */}
+        <TopNavIsland
+          currentTab={activeTab}
+          onSelectTab={setActiveTab}
+          activeCount={activeCount}
+        />
 
         <div className="desktop-body">
-          <Sidebar activeTab={activeTab} onTabChange={setActiveTab} />
+          {/* Ona-Inspired Sidebar */}
+          <Sidebar
+            currentTab={activeTab}
+            onSelectTab={setActiveTab}
+            onFilterChange={setSearchFilter}
+          />
 
+          {/* Ona-Inspired Centered Workspace */}
           <main className="desktop-workspace">
             <SetupBanner />
 
             {activeTab === "downloads" && (
               <DownloadsWorkspace
-                onVideoFetched={handleVideoFetched}
-                onPlaylistFetched={handlePlaylistFetched}
-                onNavigateTab={setActiveTab}
+                onNavigateLibrary={() => setActiveTab("library")}
+                searchFilter={searchFilter}
+                onVideoFetched={setVideoInfo}
+                onPlaylistFetched={setPlaylistInfo}
               />
             )}
 
