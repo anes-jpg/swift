@@ -26,10 +26,20 @@
   user-select: none;
 }
 
+#swift-fab.swift-has-media {
+  opacity: 0.92;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+#swift-fab.swift-has-media:hover,
 #swift-fab.swift-visible {
   opacity: 1;
   pointer-events: auto;
   transform: translateY(0);
+  background: rgba(15, 15, 22, 0.96);
+  border-color: rgba(220, 38, 38, 0.7);
+  box-shadow: 0 6px 24px rgba(220, 38, 38, 0.25), 0 0 0 1px rgba(220, 38, 38, 0.4);
 }
 
 .swift-fab-content {

@@ -365,18 +365,30 @@
     if (videoEl.__swift_listeners) return;
     videoEl.__swift_listeners = true;
 
-    const parent = videoEl.parentElement || videoEl;
-
     const onHover = () => {
       showFAB();
     };
 
-    parent.addEventListener('mousemove', onHover, { passive: true });
-    parent.addEventListener('mouseenter', onHover, { passive: true });
-    parent.addEventListener('mouseleave', () => {
-      hideFABImmediate();
-    }, { passive: true });
+    videoEl.addEventListener('mousemove', onHover, { passive: true });
+    videoEl.addEventListener('mouseenter', onHover, { passive: true });
+    if (videoEl.parentElement) {
+      videoEl.parentElement.addEventListener('mousemove', onHover, { passive: true });
+      videoEl.parentElement.addEventListener('mouseenter', onHover, { passive: true });
+    }
   }
+
+  document.addEventListener('mousemove', (e) => {
+    if (isDismissed || !fab || !currentVideo) return;
+    const rect = currentVideo.getBoundingClientRect();
+    if (
+      e.clientX >= rect.left - 15 &&
+      e.clientX <= rect.right + 15 &&
+      e.clientY >= rect.top - 15 &&
+      e.clientY <= rect.bottom + 15
+    ) {
+      showFAB();
+    }
+  }, { passive: true });
 
   // Scan only for substantial playing videos in this frame
   setInterval(() => {

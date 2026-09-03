@@ -8,9 +8,7 @@
     "https://*/*",
     "http://*/*",
     "http://127.0.0.1/*",
-    "http://localhost/*",
-    "http://127.0.0.1:17865/*",
-    "http://localhost:17865/*"
+    "http://localhost/*"
   ],
   "background": {
     "service_worker": "background.js"
