@@ -69,27 +69,24 @@ export default function App() {
       });
     });
 
-    const unlistenExtension = listen<{ url: string; title: string; referer: string }>("extension-quick-download", async (event) => {
-      const { url, title, referer } = event.payload;
-      const settings = getSettings();
-      try {
-        const info = await invoke("fetch_video_info", { url });
-        setVideoInfo(info as VideoInfo);
-      } catch (err) {
-        console.error("Extension fetch failed, falling back to quick download:", err);
+    const unlistenExtension = listen<{ url: string; title: string; referer: string }>(
+      "extension-quick-download",
+      async (event) => {
+        const { url, title, referer } = event.payload;
+        const settings = getSettings();
         try {
           await invoke("quick_download", {
             url,
-            title,
-            referer,
+            title: title || "Video",
+            referer: referer || null,
             downloadDir: settings.downloadDir || null,
             proxy: settings.proxy || null,
           });
-        } catch (fallbackErr) {
-          console.error("Extension fallback download failed:", fallbackErr);
+        } catch (err) {
+          console.error("Extension quick download failed:", err);
         }
       }
-    });
+    );
 
     const unlistenQuickStarted = listen<{ id: string; url: string; title: string }>("quick-download-started", (event) => {
       const { id, url, title } = event.payload;

@@ -9,6 +9,9 @@
   let currentVideo = null;
   let media = [];
   let hideTimer = null;
+  let idleTimer = null;
+  let isDismissed = false;
+  let isHovered = false;
 
   function isMedia(url) {
     if (!url || url.length > 2000 || url.startsWith('data:') || url.startsWith('blob:')) return false;
@@ -50,43 +53,87 @@
     media.push(item);
   }
 
+  function showFAB() {
+    if (isDismissed || !fab || !currentVideo) return;
+    fab.classList.add('swift-visible');
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      if (!isHovered && (!dropdown || !dropdown.classList.contains('swift-show'))) {
+        fab.classList.remove('swift-visible');
+      }
+    }, 3200);
+  }
+
+  function hideFABImmediate() {
+    if (!isHovered && (!dropdown || !dropdown.classList.contains('swift-show'))) {
+      fab?.classList.remove('swift-visible');
+    }
+  }
+
   function createFAB() {
     if (fab) return;
     fab = document.createElement('div');
     fab.id = 'swift-fab';
     fab.innerHTML = `
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.5" style="flex-shrink:0;">
-        <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" fill="#ef4444" />
-      </svg>
-      <span style="font-weight: 600; font-size: 12px; letter-spacing: -0.2px;">Download</span>
+      <div class="swift-fab-content" title="Download this video with Swift">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.5" class="swift-bolt">
+          <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" fill="#ef4444" />
+        </svg>
+        <span class="swift-fab-text">Download Video</span>
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="swift-chevron">
+          <polyline points="6 9 12 15 18 9"></polyline>
+        </svg>
+      </div>
+      <button type="button" class="swift-fab-close" title="Dismiss for this session">×</button>
     `;
-    fab.addEventListener('click', (e) => {
+
+    fab.querySelector('.swift-fab-content').addEventListener('click', (e) => {
       e.stopPropagation();
       e.preventDefault();
       toggleDropdown();
     });
-    fab.addEventListener('mouseenter', () => clearTimeout(hideTimer));
-    fab.addEventListener('mouseleave', startHide);
+
+    fab.querySelector('.swift-fab-close').addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      isDismissed = true;
+      fab.classList.remove('swift-visible', 'swift-has-media');
+      if (dropdown) dropdown.classList.remove('swift-show');
+    });
+
+    fab.addEventListener('mouseenter', () => {
+      isHovered = true;
+      clearTimeout(hideTimer);
+      clearTimeout(idleTimer);
+    });
+
+    fab.addEventListener('mouseleave', () => {
+      isHovered = false;
+      showFAB();
+      startHideDropdown();
+    });
+
     document.documentElement.appendChild(fab);
 
+    // Continuous smooth position tracking strictly on the active video
     const track = () => {
-      if (fab.classList.contains('swift-has-media')) {
-        if (currentVideo && currentVideo.offsetWidth > 50 && currentVideo.offsetHeight > 50) {
-          const rect = currentVideo.getBoundingClientRect();
-          fab.style.top = (Math.max(10, rect.top + 12)) + 'px';
-          fab.style.left = (Math.max(10, rect.right - fab.offsetWidth - 12)) + 'px';
-        } else {
-          fab.style.top = (window.innerHeight - fab.offsetHeight - 24) + 'px';
-          fab.style.left = (window.innerWidth - fab.offsetWidth - 24) + 'px';
+      if (fab && currentVideo && !isDismissed) {
+        const rect = currentVideo.getBoundingClientRect();
+        if (rect.width > 120 && rect.height > 80 && rect.bottom > 0 && rect.top < window.innerHeight) {
+          const top = Math.max(8, rect.top + 10);
+          const left = Math.max(8, rect.right - fab.offsetWidth - 12);
+          fab.style.top = top + 'px';
+          fab.style.left = left + 'px';
         }
       }
+
       if (dropdown && dropdown.classList.contains('swift-show') && fab) {
         const rect = fab.getBoundingClientRect();
         let dTop = rect.bottom + 6;
         let dLeft = rect.right - dropdown.offsetWidth;
         
         if (dTop + dropdown.offsetHeight > window.innerHeight) {
-          dTop = rect.top - dropdown.offsetHeight - 6;
+          dTop = Math.max(6, rect.top - dropdown.offsetHeight - 6);
         }
         if (dLeft < 8) {
           dLeft = 8;
@@ -100,11 +147,12 @@
     requestAnimationFrame(track);
   }
 
-  function startHide() {
+  function startHideDropdown() {
     clearTimeout(hideTimer);
     hideTimer = setTimeout(() => {
       if (dropdown && !dropdown.matches(':hover') && (!fab || !fab.matches(':hover'))) {
         dropdown.classList.remove('swift-show');
+        hideFABImmediate();
       }
     }, 400);
   }
@@ -188,8 +236,15 @@
     if (!dropdown) {
       dropdown = document.createElement('div');
       dropdown.id = 'swift-dropdown';
-      dropdown.addEventListener('mouseenter', () => clearTimeout(hideTimer));
-      dropdown.addEventListener('mouseleave', startHide);
+      dropdown.addEventListener('mouseenter', () => {
+        isHovered = true;
+        clearTimeout(hideTimer);
+        clearTimeout(idleTimer);
+      });
+      dropdown.addEventListener('mouseleave', () => {
+        isHovered = false;
+        startHideDropdown();
+      });
       document.body.appendChild(dropdown);
     }
 
@@ -207,23 +262,23 @@
     }
 
     if (unique.length === 0) {
-      dropdown.innerHTML = '<div class="swift-dd-empty">No streams detected</div>';
+      dropdown.innerHTML = '<div class="swift-dd-empty">No direct streams detected</div>';
     } else {
       dropdown.innerHTML = `
         <div class="swift-dd-header">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.5"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" fill="#ef4444" /></svg>
-          ${unique.length} stream${unique.length !== 1 ? 's' : ''} detected
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.5"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" fill="#ef4444" /></svg>
+          <span>${unique.length} stream${unique.length !== 1 ? 's' : ''} detected</span>
         </div>
         <div class="swift-dd-body">
           ${unique.map((m, i) => `
             <div class="swift-dd-item" data-i="${i}">
               <span class="swift-dd-format">${m.ext.toUpperCase()}</span>
               <div class="swift-dd-details">
-                <div class="swift-dd-quality">${m.quality || (m.ext === 'm3u8' ? 'HLS Stream' : (m.ext === 'mpd' ? 'DASH Stream' : 'Direct Video'))}</div>
-                <div class="swift-dd-meta">${m.size ? fmtSize(m.size) : (m.ext === 'm3u8' || m.ext === 'mpd' ? 'Adaptive Multi-Bitrate' : 'Stream')}</div>
+                <div class="swift-dd-quality">${m.quality || (m.ext === 'm3u8' ? 'HLS Adaptive Stream' : (m.ext === 'mpd' ? 'DASH Adaptive Stream' : 'Direct Video'))}</div>
+                <div class="swift-dd-meta">${m.size ? fmtSize(m.size) : (m.ext === 'm3u8' || m.ext === 'mpd' ? 'Multi-Bitrate Stream' : 'Media')}</div>
               </div>
               <button class="swift-dd-download" data-i="${i}" title="Send to Swift">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
               </button>
             </div>
           `).join('')}
@@ -234,7 +289,7 @@
               <div class="swift-dd-meta">${window.location.hostname}</div>
             </div>
             <button class="swift-dd-download" data-i="page" title="Send page to Swift">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             </button>
           </div>
         </div>
@@ -257,28 +312,65 @@
     dropdown.classList.add('swift-show');
   }
 
+  // Hook mouse events on video to show panel on hover and fade when idle
+  function attachVideoListeners(videoEl) {
+    if (videoEl.__swift_listeners) return;
+    videoEl.__swift_listeners = true;
+
+    const parent = videoEl.parentElement || videoEl;
+
+    const onHover = () => {
+      showFAB();
+    };
+
+    parent.addEventListener('mousemove', onHover, { passive: true });
+    parent.addEventListener('mouseenter', onHover, { passive: true });
+    parent.addEventListener('mouseleave', () => {
+      hideFABImmediate();
+    }, { passive: true });
+  }
+
+  // Scan only for substantial playing videos in this frame
   setInterval(() => {
-    const mediaElements = Array.from(document.querySelectorAll('video, audio'));
+    if (isDismissed) return;
+
+    const videos = Array.from(document.querySelectorAll('video'));
     let best = null;
     let maxArea = 0;
-    for (const el of mediaElements) {
-      const area = el.offsetWidth * el.offsetHeight;
-      if (area > maxArea) { maxArea = area; best = el; }
+
+    for (const v of videos) {
+      // Must be a visible player of substantial size (not a 1x1 tracking pixel)
+      const rect = v.getBoundingClientRect();
+      const area = rect.width * rect.height;
+      if (rect.width >= 160 && rect.height >= 90 && area > maxArea) {
+        maxArea = area;
+        best = v;
+      }
     }
-    
-    if (!best && mediaElements.length > 0) best = mediaElements[0];
-    
-    if (best || media.length > 0 || isYouTube) {
-      if (!fab) createFAB();
+
+    if (best) {
       currentVideo = best;
-      if (best) scanVideoSources(best);
+      attachVideoListeners(best);
+      scanVideoSources(best);
+
+      if (!fab) {
+        createFAB();
+      }
       fab.classList.add('swift-has-media');
+    } else {
+      // NO video in this frame: NEVER show the FAB here!
+      // This eliminates duplicate FABs in parent wrapper frames!
+      if (fab) {
+        fab.classList.remove('swift-has-media', 'swift-visible');
+        if (dropdown) dropdown.classList.remove('swift-show');
+      }
     }
-  }, 1200);
+  }, 1000);
 
   document.addEventListener('click', (e) => {
     if (dropdown && !dropdown.contains(e.target) && !fab?.contains(e.target)) {
       dropdown.classList.remove('swift-show');
+      hideFABImmediate();
     }
   });
 

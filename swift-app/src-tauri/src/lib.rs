@@ -478,9 +478,8 @@ fn run_download_with_fallback(
 ) -> (bool, Option<String>) {
     let ffmpeg_available = has_command("ffmpeg");
 
-    let mut candidates: Vec<Option<String>> =
-        detect_cookie_browsers().into_iter().map(Some).collect();
-    candidates.push(None);
+    let mut candidates = vec![None];
+    candidates.extend(detect_cookie_browsers().into_iter().map(Some));
 
     for candidate in &candidates {
         let args = ytdlp_download_args(
@@ -1193,6 +1192,102 @@ fn get_extension_dir() -> Result<String, String> {
     Ok(ext_dir.to_string_lossy().to_string())
 }
 
+fn handle_http_client(mut stream: std::net::TcpStream, app: tauri::AppHandle) {
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+
+    let mut request = String::new();
+    let mut buf = [0u8; 1024];
+    let mut content_length = 0;
+    let mut headers_parsed = false;
+
+    loop {
+        let n = match stream.read(&mut buf) {
+            Ok(n) if n > 0 => n,
+            _ => break,
+        };
+        request.push_str(&String::from_utf8_lossy(&buf[..n]));
+
+        if !headers_parsed {
+            if let Some(pos) = request.find("\r\n\r\n") {
+                headers_parsed = true;
+                let headers = &request[..pos];
+                for line in headers.lines() {
+                    let line_lower = line.to_lowercase();
+                    if line_lower.starts_with("content-length:") {
+                        if let Ok(len) = line_lower[15..].trim().parse::<usize>() {
+                            content_length = len;
+                        }
+                    }
+                }
+            }
+        }
+
+        if headers_parsed {
+            let body_start = request.find("\r\n\r\n").unwrap() + 4;
+            if request.len() - body_start >= content_length {
+                break;
+            }
+        }
+    }
+
+    if request.is_empty() {
+        return;
+    }
+
+    let first_line = request.lines().next().unwrap_or("");
+
+    if first_line.starts_with("OPTIONS") {
+        let response = "HTTP/1.1 204 No Content\r\n\
+            Access-Control-Allow-Origin: *\r\n\
+            Access-Control-Allow-Methods: POST, OPTIONS\r\n\
+            Access-Control-Allow-Headers: Content-Type\r\n\
+            Access-Control-Allow-Private-Network: true\r\n\
+            Connection: close\r\n\r\n";
+        let _ = stream.write_all(response.as_bytes());
+        return;
+    }
+
+    if first_line.starts_with("POST") {
+        let body_start = request.find("\r\n\r\n").map(|i| i + 4).unwrap_or(0);
+        let body = &request[body_start..];
+
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(body.trim()) {
+            if json["token"].as_str() != Some(SWIFT_TOKEN) {
+                let response = "HTTP/1.1 403 Forbidden\r\n\
+                    Access-Control-Allow-Origin: *\r\n\
+                    Connection: close\r\n\r\n";
+                let _ = stream.write_all(response.as_bytes());
+                return;
+            }
+
+            let url = json["url"].as_str().unwrap_or("");
+            if !url.is_empty() {
+                let title = json["title"].as_str().unwrap_or("Video");
+                let referer = json["referer"].as_str().unwrap_or("");
+
+                let _ = app.emit("extension-quick-download", serde_json::json!({
+                    "url": url,
+                    "title": title,
+                    "referer": referer,
+                }));
+
+                let response = "HTTP/1.1 200 OK\r\n\
+                    Access-Control-Allow-Origin: *\r\n\
+                    Content-Type: application/json\r\n\
+                    Connection: close\r\n\r\n\
+                    {\"ok\":true}";
+                let _ = stream.write_all(response.as_bytes());
+                return;
+            }
+        }
+    }
+
+    let response = "HTTP/1.1 400 Bad Request\r\n\
+        Access-Control-Allow-Origin: *\r\n\
+        Connection: close\r\n\r\n";
+    let _ = stream.write_all(response.as_bytes());
+}
+
 fn start_local_server(app: tauri::AppHandle) {
     std::thread::spawn(move || {
         let listener = match TcpListener::bind("127.0.0.1:17865") {
@@ -1204,104 +1299,15 @@ fn start_local_server(app: tauri::AppHandle) {
         };
 
         for stream in listener.incoming() {
-            let mut stream = match stream {
+            let stream = match stream {
                 Ok(s) => s,
                 Err(_) => continue,
             };
 
-            let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
-
-            let mut request = String::new();
-            let mut buf = [0u8; 1024];
-            let mut content_length = 0;
-            let mut headers_parsed = false;
-
-            loop {
-                let n = match stream.read(&mut buf) {
-                    Ok(n) if n > 0 => n,
-                    _ => break,
-                };
-                request.push_str(&String::from_utf8_lossy(&buf[..n]));
-
-                if !headers_parsed {
-                    if let Some(pos) = request.find("\r\n\r\n") {
-                        headers_parsed = true;
-                        let headers = &request[..pos];
-                        for line in headers.lines() {
-                            let line_lower = line.to_lowercase();
-                            if line_lower.starts_with("content-length:") {
-                                if let Ok(len) = line_lower[15..].trim().parse::<usize>() {
-                                    content_length = len;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if headers_parsed {
-                    let body_start = request.find("\r\n\r\n").unwrap() + 4;
-                    if request.len() - body_start >= content_length {
-                        break;
-                    }
-                }
-            }
-
-            if request.is_empty() {
-                continue;
-            }
-
-            let first_line = request.lines().next().unwrap_or("");
-
-            if first_line.starts_with("OPTIONS") {
-                let response = "HTTP/1.1 204 No Content\r\n\
-                    Access-Control-Allow-Origin: *\r\n\
-                    Access-Control-Allow-Methods: POST, OPTIONS\r\n\
-                    Access-Control-Allow-Headers: Content-Type\r\n\
-                    Access-Control-Allow-Private-Network: true\r\n\
-                    Connection: close\r\n\r\n";
-                let _ = stream.write_all(response.as_bytes());
-                continue;
-            }
-
-            if first_line.starts_with("POST") {
-                let body_start = request.find("\r\n\r\n").map(|i| i + 4).unwrap_or(0);
-                let body = &request[body_start..];
-
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(body.trim()) {
-                    if json["token"].as_str() != Some(SWIFT_TOKEN) {
-                        let response = "HTTP/1.1 403 Forbidden\r\n\
-                            Access-Control-Allow-Origin: *\r\n\
-                            Connection: close\r\n\r\n";
-                        let _ = stream.write_all(response.as_bytes());
-                        continue;
-                    }
-
-                    let url = json["url"].as_str().unwrap_or("");
-                    if !url.is_empty() {
-                        let title = json["title"].as_str().unwrap_or("Video");
-                        let referer = json["referer"].as_str().unwrap_or("");
-
-                        let _ = app.emit("extension-quick-download", serde_json::json!({
-                            "url": url,
-                            "title": title,
-                            "referer": referer,
-                        }));
-
-                        let response = "HTTP/1.1 200 OK\r\n\
-                            Access-Control-Allow-Origin: *\r\n\
-                            Content-Type: application/json\r\n\
-                            Connection: close\r\n\r\n\
-                            {\"ok\":true}";
-                        let _ = stream.write_all(response.as_bytes());
-                        continue;
-                    }
-                }
-            }
-
-            let response = "HTTP/1.1 400 Bad Request\r\n\
-                Access-Control-Allow-Origin: *\r\n\
-                Connection: close\r\n\r\n";
-            let _ = stream.write_all(response.as_bytes());
+            let app_handle = app.clone();
+            std::thread::spawn(move || {
+                handle_http_client(stream, app_handle);
+            });
         }
     });
 }
